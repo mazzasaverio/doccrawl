@@ -1,6 +1,6 @@
 # Doccrawl - Project Analysis Request
 
-Generated on: 2024-10-27 19:07:27
+Generated on: 2024-10-28 10:29:44
 
 ## Analysis Objectives
 
@@ -33,13 +33,22 @@ Please analyze this codebase focusing on:
 ├── pyproject.toml
 ├── src
 │   ├── core
+│   │   ├── crawler.py
+│   │   └── strategies
+│   │       ├── type_0.py
+│   │       ├── type_1.py
+│   │       ├── type_2.py
+│   │       ├── type_3.py
+│   │       └── type_4.py
 │   ├── crud
 │   │   ├── base_crud.py
 │   │   └── frontier_crud.py
 │   ├── db
 │   │   └── connection.py
 │   ├── models
+│   │   └── frontier_model.py
 │   └── utils
+│       └── logging.py
 ├── tests
 └── uv.lock
 # Code Contents
@@ -217,6 +226,12 @@ database:
 ```
 
 
+# src/utils/logging.py
+```py
+
+```
+
+
 # src/db/connection.py
 ```py
 # src/db/connection.py
@@ -300,13 +315,563 @@ class DatabaseConnection:
 ```
 
 
-# src/crud/base_crud.py
+# src/core/crawler.py
 ```py
 
 ```
 
 
+# src/core/strategies/type_0.py
+```py
+
+```
+
+
+# src/core/strategies/type_1.py
+```py
+
+```
+
+
+# src/core/strategies/type_2.py
+```py
+
+```
+
+
+# src/core/strategies/type_3.py
+```py
+
+```
+
+
+# src/core/strategies/type_4.py
+```py
+
+```
+
+
+# src/crud/base_crud.py
+```py
+# src/crud/base_crud.py
+from typing import Dict, List, Optional, Any, Tuple
+from datetime import datetime
+import logfire
+from psycopg2.extras import execute_values, DictCursor
+
+class BaseCRUD:
+    """
+    Base CRUD operations for database interactions.
+    Provides generic database operations that can be used across different tables.
+    """
+    
+    def __init__(self, conn):
+        """
+        Initialize BaseCRUD with a database connection.
+        
+        Args:
+            conn: psycopg2 connection object
+        """
+        self.conn = conn
+        self.logger = logfire
+
+    def insert_one(
+        self, 
+        table: str, 
+        data: Dict[str, Any], 
+        return_id: bool = True
+    ) -> Optional[int]:
+        """
+        Insert a single record into specified table.
+        
+        Args:
+            table: Table name
+            data: Dictionary of column names and values
+            return_id: Whether to return the ID of the inserted record
+        
+        Returns:
+            The ID of the inserted record if return_id is True
+        """
+        with self.conn.cursor() as cur:
+            try:
+                # Filter out None values unless explicitly needed
+                filtered_data = {k: v for k, v in data.items() if v is not None}
+                
+                columns = list(filtered_data.keys())
+                values = list(filtered_data.values())
+                placeholders = ', '.join(['%s'] * len(columns))
+                
+                query = f"""
+                INSERT INTO {table} 
+                ({', '.join(columns)}) 
+                VALUES ({placeholders})
+                """
+                
+                if return_id:
+                    query += " RETURNING id"
+                
+                cur.execute(query, values)
+                record_id = cur.fetchone()[0] if return_id else None
+                self.conn.commit()
+                
+                self.logger.info(
+                    'Record inserted successfully',
+                    table=table,
+                    record_id=record_id if return_id else None
+                )
+                
+                return record_id
+                
+            except Exception as e:
+                self.conn.rollback()
+                self.logger.error(
+                    'Error inserting record',
+                    table=table,
+                    error=str(e),
+                    data=str(data)
+                )
+                raise
+
+    def insert_many(
+        self, 
+        table: str, 
+        columns: List[str], 
+        values: List[Tuple],
+        page_size: int = 1000
+    ) -> None:
+        """
+        Insert multiple records into specified table with pagination.
+        
+        Args:
+            table: Table name
+            columns: List of column names
+            values: List of tuples containing values
+            page_size: Number of records to insert at once
+        """
+        with self.conn.cursor() as cur:
+            try:
+                # Insert in batches to handle large datasets
+                for i in range(0, len(values), page_size):
+                    batch = values[i:i + page_size]
+                    query = f"""
+                    INSERT INTO {table} 
+                    ({', '.join(columns)}) 
+                    VALUES %s
+                    """
+                    
+                    execute_values(cur, query, batch)
+                    self.conn.commit()
+                
+                self.logger.info(
+                    'Bulk insert completed successfully',
+                    table=table,
+                    total_records=len(values)
+                )
+                
+            except Exception as e:
+                self.conn.rollback()
+                self.logger.error(
+                    'Error in bulk insert',
+                    table=table,
+                    error=str(e),
+                    batch_size=page_size
+                )
+                raise
+
+    def update(
+        self, 
+        table: str, 
+        conditions: Dict[str, Any], 
+        data: Dict[str, Any],
+        return_updated: bool = False
+    ) -> Optional[List[Dict]]:
+        """
+        Update records that match the conditions.
+        
+        Args:
+            table: Table name
+            conditions: Dictionary of column names and values for WHERE clause
+            data: Dictionary of columns to update with new values
+            return_updated: Whether to return the updated records
+            
+        Returns:
+            List of updated records if return_updated is True
+        """
+        with self.conn.cursor(cursor_factory=DictCursor) as cur:
+            try:
+                # Prepare SET clause
+                set_items = [f"{k} = %s" for k in data.keys()]
+                set_values = list(data.values())
+                
+                # Prepare WHERE clause
+                where_items = [f"{k} = %s" for k in conditions.keys()]
+                where_values = list(conditions.values())
+                
+                query = f"""
+                UPDATE {table} 
+                SET {', '.join(set_items)}
+                WHERE {' AND '.join(where_items)}
+                """
+                
+                if return_updated:
+                    query += " RETURNING *"
+                
+                cur.execute(query, set_values + where_values)
+                updated_records = [dict(row) for row in cur.fetchall()] if return_updated else None
+                self.conn.commit()
+                
+                self.logger.info(
+                    'Update completed successfully',
+                    table=table,
+                    conditions=str(conditions),
+                    records_updated=len(updated_records) if return_updated else 'Unknown'
+                )
+                
+                return updated_records
+                
+            except Exception as e:
+                self.conn.rollback()
+                self.logger.error(
+                    'Error updating records',
+                    table=table,
+                    error=str(e),
+                    conditions=str(conditions)
+                )
+                raise
+
+    def select(
+        self,
+        table: str,
+        conditions: Optional[Dict[str, Any]] = None,
+        columns: Optional[List[str]] = None,
+        order_by: Optional[str] = None,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None
+    ) -> List[Dict]:
+        """
+        Select records based on conditions with pagination support.
+        
+        Args:
+            table: Table name
+            conditions: Optional dictionary of column names and values for WHERE clause
+            columns: Optional list of columns to select
+            order_by: Optional string for ORDER BY clause
+            limit: Optional integer for LIMIT clause
+            offset: Optional integer for OFFSET clause
+        
+        Returns:
+            List of dictionaries representing the selected records
+        """
+        with self.conn.cursor(cursor_factory=DictCursor) as cur:
+            try:
+                # Build SELECT clause
+                select_clause = '*' if not columns else ', '.join(columns)
+                query_parts = [f"SELECT {select_clause} FROM {table}"]
+                values = []
+                
+                # Build WHERE clause if conditions provided
+                if conditions:
+                    where_conditions = []
+                    for k, v in conditions.items():
+                        if isinstance(v, (list, tuple)):
+                            where_conditions.append(f"{k} = ANY(%s)")
+                            values.append(list(v))
+                        elif v is None:
+                            where_conditions.append(f"{k} IS NULL")
+                        else:
+                            where_conditions.append(f"{k} = %s")
+                            values.append(v)
+                    
+                    if where_conditions:
+                        query_parts.append("WHERE " + " AND ".join(where_conditions))
+                
+                # Add optional clauses
+                if order_by:
+                    query_parts.append(f"ORDER BY {order_by}")
+                if limit is not None:
+                    query_parts.append(f"LIMIT {limit}")
+                if offset is not None:
+                    query_parts.append(f"OFFSET {offset}")
+                
+                query = " ".join(query_parts)
+                cur.execute(query, values)
+                
+                results = [dict(row) for row in cur.fetchall()]
+                
+                self.logger.info(
+                    'Select query executed successfully',
+                    table=table,
+                    records_found=len(results)
+                )
+                
+                return results
+                
+            except Exception as e:
+                self.logger.error(
+                    'Error selecting records',
+                    table=table,
+                    error=str(e),
+                    conditions=str(conditions)
+                )
+                raise
+
+    def delete(self, table: str, conditions: Dict[str, Any]) -> int:
+        """
+        Delete records based on conditions.
+        
+        Args:
+            table: Table name
+            conditions: Dictionary of column names and values for WHERE clause
+        
+        Returns:
+            Number of records deleted
+        """
+        with self.conn.cursor() as cur:
+            try:
+                where_items = [f"{k} = %s" for k in conditions.keys()]
+                values = list(conditions.values())
+                
+                query = f"""
+                DELETE FROM {table} 
+                WHERE {' AND '.join(where_items)}
+                RETURNING id
+                """
+                
+                cur.execute(query, values)
+                deleted_count = len(cur.fetchall())
+                self.conn.commit()
+                
+                self.logger.info(
+                    'Delete operation completed successfully',
+                    table=table,
+                    records_deleted=deleted_count
+                )
+                
+                return deleted_count
+                
+            except Exception as e:
+                self.conn.rollback()
+                self.logger.error(
+                    'Error deleting records',
+                    table=table,
+                    error=str(e),
+                    conditions=str(conditions)
+                )
+                raise
+
+    def exists(self, table: str, conditions: Dict[str, Any]) -> bool:
+        """
+        Check if records exist based on conditions.
+        
+        Args:
+            table: Table name
+            conditions: Dictionary of column names and values to check
+        
+        Returns:
+            Boolean indicating if matching record exists
+        """
+        with self.conn.cursor() as cur:
+            try:
+                where_items = [f"{k} = %s" for k in conditions.keys()]
+                values = list(conditions.values())
+                
+                query = f"""
+                SELECT EXISTS(
+                    SELECT 1 FROM {table} 
+                    WHERE {' AND '.join(where_items)}
+                )
+                """
+                
+                cur.execute(query, values)
+                return cur.fetchone()[0]
+                
+            except Exception as e:
+                self.logger.error(
+                    'Error checking existence',
+                    table=table,
+                    error=str(e),
+                    conditions=str(conditions)
+                )
+                raise
+```
+
+
 # src/crud/frontier_crud.py
 ```py
+
+```
+
+
+# src/models/frontier_model.py
+```py
+# src/models/frontier.py
+from datetime import datetime
+from typing import Optional, List
+from enum import Enum
+from pydantic import BaseModel, Field, HttpUrl, field_validator
+from urllib.parse import urlparse
+
+class UrlStatus(str, Enum):
+    """Enumeration of possible URL statuses in the frontier."""
+    PENDING = 'pending'
+    PROCESSING = 'processing'
+    PROCESSED = 'processed'
+    FAILED = 'failed'
+    SKIPPED = 'skipped'
+
+class UrlType(int, Enum):
+    """Enumeration of URL types with their descriptions."""
+    DIRECT_TARGET = 0  # Direct links to target documents
+    SINGLE_PAGE = 1    # Pages containing target document links
+    SEED_TARGET = 2    # Pages with both seed URLs and target documents
+    COMPLEX_AI = 3     # Three-level crawling with AI assistance
+    FULL_AI = 4        # Multi-level crawling with full AI assistance
+
+class FrontierUrl(BaseModel):
+    """Model representing a URL in the frontier."""
+    
+    # Required fields
+    url: HttpUrl
+    category: str = Field(..., min_length=1, max_length=255)
+    url_type: UrlType
+    max_depth: int = Field(..., ge=0)
+
+    # Optional fields
+    id: Optional[int] = None
+    depth: int = Field(default=0, ge=0)
+    main_domain: Optional[str] = None
+    target_patterns: Optional[List[str]] = Field(default=None)
+    seed_pattern: Optional[str] = None
+    is_target: bool = False
+    parent_url: Optional[HttpUrl] = None
+    status: UrlStatus = UrlStatus.PENDING
+    error_message: Optional[str] = None
+    insert_date: Optional[datetime] = None
+    last_update: Optional[datetime] = None
+
+    @field_validator('main_domain', mode='before', check_fields=True)
+    def set_main_domain(cls, v, info):
+        """Extract and validate main domain from URL if not provided."""
+        if not v and 'url' in info.data:
+            return urlparse(str(info.data['url'])).netloc
+        return v
+
+    @field_validator('max_depth')
+    def validate_max_depth(cls, v, info):
+        """Validate max_depth based on URL type."""
+        if 'url_type' in info.data:
+            url_type = info.data['url_type']
+            if url_type == UrlType.DIRECT_TARGET and v != 0:
+                raise ValueError("Type 0 (DIRECT_TARGET) must have max_depth = 0")
+            elif url_type == UrlType.SINGLE_PAGE and v != 0:
+                raise ValueError("Type 1 (SINGLE_PAGE) must have max_depth = 0")
+            elif url_type == UrlType.SEED_TARGET and v != 1:
+                raise ValueError("Type 2 (SEED_TARGET) must have max_depth = 1")
+            elif url_type == UrlType.COMPLEX_AI and v != 2:
+                raise ValueError("Type 3 (COMPLEX_AI) must have max_depth = 2")
+            elif url_type == UrlType.FULL_AI and v < 2:
+                raise ValueError("Type 4 (FULL_AI) must have max_depth >= 2")
+        return v
+
+    @field_validator('target_patterns')
+    @classmethod
+    def validate_target_patterns(cls, v, info):
+        """Validate target patterns based on URL type."""
+        if 'url_type' in info.data:
+            url_type = info.data['url_type']
+            if url_type in [UrlType.DIRECT_TARGET] and not v:
+                raise ValueError("Type 0 (DIRECT_TARGET) must have target patterns")
+        return v
+
+    @field_validator('seed_pattern')
+    @classmethod
+    def validate_seed_pattern(cls, v, info):
+        """Validate seed pattern based on URL type."""
+        if 'url_type' in info.data:
+            url_type = info.data['url_type']
+            if url_type in [UrlType.SEED_TARGET, UrlType.COMPLEX_AI] and not v:
+                raise ValueError(f"Type {url_type} must have a seed pattern")
+        return v
+
+    class Config:
+        from_attributes = True
+        json_schema_extra = {
+            "example": {
+                "url": "https://example.com/docs/page1",
+                "category": "documentation",
+                "url_type": 2,
+                "max_depth": 1,
+                "depth": 0,
+                "target_patterns": [".*\\.pdf$"],
+                "seed_pattern": "/docs/.*",
+                "is_target": False
+            }
+        }
+
+class FrontierStatistics(BaseModel):
+    """Model representing frontier statistics for a category."""
+    
+    category: str
+    total_urls: int
+    target_urls: int
+    pending_urls: int
+    processed_urls: int
+    failed_urls: int
+    unique_domains: int
+    max_reached_depth: int
+    success_rate: float = Field(..., ge=0, le=100)
+    first_url_date: datetime
+    last_update_date: datetime
+
+    @field_validator('success_rate')
+    @classmethod
+    def calculate_success_rate(cls, v, info):
+        """Recalculate success rate if not provided."""
+        if v == 0 and 'processed_urls' in info.data and 'failed_urls' in info.data:
+            total = info.data['processed_urls'] + info.data['failed_urls']
+            if total > 0:
+                return (info.data['processed_urls'] / total) * 100
+        return v
+
+class FrontierBatch(BaseModel):
+    """Model representing a batch of URLs for bulk operations."""
+    
+    urls: List[FrontierUrl]
+    batch_size: Optional[int] = Field(default=100, gt=0)
+    
+    @field_validator('urls')
+    def validate_batch(cls, v):
+        """Validate the batch of URLs."""
+        if not v:
+            raise ValueError("Batch cannot be empty")
+        return v
+
+    def chunk_urls(self) -> List[List[FrontierUrl]]:
+        """Split URLs into chunks based on batch_size."""
+        return [
+            self.urls[i:i + self.batch_size] 
+            for i in range(0, len(self.urls), self.batch_size)
+        ]
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "urls": [
+                    {
+                        "url": "https://example.com/docs/page1",
+                        "category": "documentation",
+                        "url_type": 2,
+                        "max_depth": 1
+                    },
+                    {
+                        "url": "https://example.com/docs/page2",
+                        "category": "documentation",
+                        "url_type": 2,
+                        "max_depth": 1
+                    }
+                ],
+                "batch_size": 100
+            }
+        }
 
 ```
