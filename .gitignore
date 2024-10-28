@@ -1,5 +1,5 @@
 project_documentation.md
-crawler_config.yaml
+config/crawler_config.yaml
 llm_analysis.md
 # Byte-compiled / optimized / DLL files
 __pycache__/
