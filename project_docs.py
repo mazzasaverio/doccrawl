@@ -16,10 +16,10 @@ class ProjectDocumentor:
         self.ignore_patterns = {
             '.git', '.venv', '__pycache__', '.pytest_cache',
             'logs', 'downloads', 'dist', 'build', '*.pyc',
-            '.coverage', '.env', '.DS_Store', '.idea', '.vscode'
+            '.coverage', '.env', '.DS_Store', '.idea'
         }
         
-        self.code_extensions = {'.py', '.yml', '.yaml', '.toml',  '.txt', '.sh'}
+        self.code_extensions = {'.py', '.yml', '.yaml', '.toml',  '.txt', '.sh','.vscode'}
 
     def _should_ignore(self, path: Path) -> bool:
         """Check if path should be ignored."""

@@ -1,11 +1,12 @@
+"""Logging configuration module."""
 import logfire
 
 def setup_logging():
-    """Configure logging with logfire based on official documentation."""
-    
-    logfire.configure()  # Configura logfire con le impostazioni di base
+    """Configure logging with logfire."""
+    # Configura logfire con le impostazioni di base
+    logfire.configure()
 
-    # Configurazione metriche di base per il monitoraggio
+    # Configurazione metriche per il monitoraggio
     logfire.metric_counter(
         'processed_urls',
         unit='1',
@@ -24,6 +25,5 @@ def setup_logging():
         description='Time taken to process URLs'
     )
 
-def get_logger(name: str):
-    """Get a logfire logger instance."""
-    return logfire.getLogger(name)
+# Non serve get_logger perché useremo direttamente logfire
+logger = logfire

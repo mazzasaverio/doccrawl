@@ -1,6 +1,6 @@
 # config/crawler_config.yaml
 # Document Crawler Configuration Guide
-# 
+#
 # This configuration file defines the crawling strategy for different types of document sources.
 # Each URL is classified into one of five types (0-4), each with specific behaviors:
 #
@@ -53,11 +53,13 @@
 #   Examples:
 #   - "/archive/\d{4}/$" : Matches year-based archive sections
 #   - "/section/[a-zA-Z0-9-]+/$" : Matches section URLs
-
+# Config for Document Crawler
 crawler:
   default_settings:
-    request_delay: 1.0
-    timeout: 30
+    request_delay: 1.0 # seconds
+    timeout: 30 # seconds
+    max_concurrent_pages: 5
+    batch_size: 10
 
   categories:
     - name: "Roma La Sapienza"
@@ -66,28 +68,21 @@ crawler:
         - url: "https://www.uniroma1.it/it/pagina/premi-tesi-borse-di-studio-e-altre-opportunita?page=1"
           type: 3
           target_patterns:
-            - ".*\.pdf$"
+            - ".*\\.pdf$"
           seed_pattern: "https://www.uniroma1.it/it/borsa-di-studio"
           max_depth: 2
 
         - url: "https://www.uniroma1.it/it/pagina/premi-tesi-borse-di-studio-e-altre-opportunita?page=2"
           type: 3
           target_patterns:
-            - ".*\.pdf$"
+            - ".*\\.pdf$"
           seed_pattern: "https://www.uniroma1.it/it/borsa-di-studio"
           max_depth: 2
 
         - url: "https://www.uniroma1.it/it/pagina/premi-tesi-borse-di-studio-e-altre-opportunita?page=3"
           type: 3
           target_patterns:
-            - ".*\.pdf$"
-          seed_pattern: "https://www.uniroma1.it/it/borsa-di-studio"
-          max_depth: 2
-
-        - url: "https://www.uniroma1.it/it/pagina/premi-tesi-borse-di-studio-e-altre-opportunita"
-          type: 3
-          target_patterns:
-            - ".*\.pdf$"
+            - ".*\\.pdf$"
           seed_pattern: "https://www.uniroma1.it/it/borsa-di-studio"
           max_depth: 2
 
@@ -97,25 +92,22 @@ crawler:
         - url: "https://bandi.unibo.it/agevolazioni/premi-laurea"
           type: 2
           target_patterns:
-            - ".*\.pdf$"
+            - ".*\\.pdf$"
+          seed_pattern: ".*/agevolazioni/premi-laurea/.*" # Aggiunto un pattern esempio per Type 2
           max_depth: 1
 
         - url: "https://bandi.unibo.it/agevolazioni/borse?b_start:int=20"
           type: 2
           target_patterns:
-            - ".*\.pdf$"
+            - ".*\\.pdf$"
+          seed_pattern: ".*/agevolazioni/borse/.*" # Aggiunto un pattern esempio per Type 2
           max_depth: 1
 
         - url: "https://bandi.unibo.it/agevolazioni/borse"
           type: 2
           target_patterns:
-            - ".*\.pdf$"
-          max_depth: 1
-
-        - url: "https://bandi.unibo.it/agevolazioni/borse?b_start:int=10"
-          type: 2
-          target_patterns:
-            - ".*\.pdf$"
+            - ".*\\.pdf$"
+          seed_pattern: ".*/agevolazioni/borse/.*" # Aggiunto un pattern esempio per Type 2
           max_depth: 1
 
     - name: "Torino"
@@ -124,28 +116,15 @@ crawler:
         - url: "https://webapps.unito.it/concorsiweb/visualizzaperweb.php?tipo=25&p=y&C7=all&criterio35=A&criterio46=No"
           type: 1
           target_patterns:
-            - ".*\.pdf$"
+            - ".*\\.pdf$"
+          seed_pattern: null # Type 1 non richiede seed_pattern
           max_depth: 0
 
         - url: "https://webapps.unito.it/concorsiweb/visualizzaperweb.php?tipo=24&p=y&C7=all&criterio35=A&criterio46=No"
           type: 1
           target_patterns:
-            - ".*\.pdf$"
-          max_depth: 0
-
-        - url: "https://webapps.unito.it/concorsiweb/visualizzaperweb.php?tipo=24&p=y&C7=all&criterio35=A&criterio46=Si"
-          type: 1
-          target_patterns:
-            - ".*\.pdf$"
-          max_depth: 0
-
-    - name: "Napoli Federico II"
-      description: "Borse di studio e premi di laurea UniNa"
-      urls:
-        - url: "https://www.unina.it/ateneo/concorsi/borse-di-studio"
-          type: 1
-          target_patterns:
-            - ".*\.pdf$"
+            - ".*\\.pdf$"
+          seed_pattern: null # Type 1 non richiede seed_pattern
           max_depth: 0
 
 database:

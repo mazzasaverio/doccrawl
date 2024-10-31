@@ -1,4 +1,4 @@
-# src/crud/frontier_crud.py
+# src/doccrawl/crud/frontier_crud.py
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 from urllib.parse import urlparse
@@ -12,6 +12,53 @@ class FrontierCRUD(BaseCRUD):
     def __init__(self, conn):
         super().__init__(conn)
         self.table = "url_frontier"
+
+    def create_urls_batch(self, batch: FrontierBatch) -> None:
+        """
+        Create multiple URL entries in batch.
+        
+        Args:
+            batch: FrontierBatch model containing multiple URLs
+        """
+        now = datetime.now()
+        columns = [
+            'url', 'category', 'url_type', 'depth', 'main_domain',
+            'target_patterns', 'seed_pattern', 'max_depth', 'is_target',
+            'parent_url', 'insert_date', 'last_update', 'status'
+        ]
+        
+        values = []
+        for url_chunk in batch.chunk_urls():
+            chunk_values = []
+            for frontier_url in url_chunk:
+                # Convertiamo i valori Pydantic in tipi Python nativi
+                data = frontier_url.model_dump()
+                
+                # Convertiamo esplicitamente l'URL in stringa
+                data['url'] = str(data['url'])
+                if data.get('parent_url'):
+                    data['parent_url'] = str(data['parent_url'])
+                
+                # Creiamo la tupla di valori nell'ordine corretto
+                row = (
+                    data['url'],                              # url
+                    data['category'],                         # category
+                    data['url_type'].value,                   # url_type (convertiamo l'enum nel suo valore)
+                    data['depth'],                            # depth
+                    data['main_domain'],                      # main_domain
+                    data.get('target_patterns'),              # target_patterns
+                    data.get('seed_pattern'),                 # seed_pattern
+                    data['max_depth'],                        # max_depth
+                    data['is_target'],                        # is_target
+                    data.get('parent_url'),                   # parent_url
+                    now,                                      # insert_date
+                    now,                                      # last_update
+                    UrlStatus.PENDING.value                   # status
+                )
+                chunk_values.append(row)
+            values.extend(chunk_values)
+        
+        self.insert_many(self.table, columns, values)
 
     def create_url(self, frontier_url: FrontierUrl) -> int:
         """

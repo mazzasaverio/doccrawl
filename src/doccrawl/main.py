@@ -1,6 +1,7 @@
+"""Main application module."""
 import asyncio
-import sys
 from pathlib import Path
+from pprint import pp
 import logfire
 
 from doccrawl.config.settings import settings
@@ -15,7 +16,7 @@ class CrawlerApp:
     
     def __init__(self):
         setup_logging()
-        self.logger = logfire.getLogger(__name__)
+        self.logger = logfire
         self.config = None
         self.db_connection = None
         self.frontier_crud = None
@@ -24,21 +25,18 @@ class CrawlerApp:
         """Load crawler configuration."""
         with logfire.span('load_config'):
             try:
-                self.config = settings.model_dump()
-                self.logger.info("Configuration loaded successfully")
+                # Converte la configurazione in un dizionario per mantenere la compatibilità
+                self.config = {
+                    'crawler': {
+                        'categories': settings.get_categories(),
+                        'default_settings': settings.crawler.model_dump()
+                    }
+                }
+                logfire.info("Configuration loaded successfully")
                 return self.config
                 
             except Exception as e:
-                self.logger.error(
-                    "Error loading configuration",
-                    error=str(e),
-                    config_locations=str([
-                        "config/crawler_config.yaml",
-                        "crawler_config.yaml",
-                        str(Path(__file__).parent.parent.parent / "config" / "crawler_config.yaml"),
-                        str(Path.home() / ".config" / "doccrawl" / "crawler_config.yaml")
-                    ])
-                )
+                logfire.error("Error loading configuration", error=str(e))
                 raise
 
     async def init_database(self):
@@ -50,12 +48,11 @@ class CrawlerApp:
                 self.db_connection.create_tables()
                 self.frontier_crud = FrontierCRUD(self.db_connection)
                 
-                self.logger.info("Database initialized successfully")
+                logfire.info("Database initialized successfully")
                 
             except Exception as e:
-                self.logger.error("Database initialization failed", error=str(e))
+                logfire.error("Database initialization failed", error=str(e))
                 raise
-
 
     async def initialize_frontier(self):
         """Initialize frontier with URLs from configuration."""
@@ -63,17 +60,26 @@ class CrawlerApp:
             try:
                 urls_to_create = []
                 
-                for category in self.config['crawler']['categories']:
-                    span.set_attribute('current_category', category['name'])
-                    
-                    for url_config in category['urls']:
+                # Accedi alle categorie dal config
+                categories = self.config['crawler']['categories']
+                if not categories:
+                    logfire.warning("No categories found in configuration")
+                    return
+
+               
+                for category in categories:
+                   
+                
+                    for url_config in category.urls:
+                       
+                        logfire.info('url_config', url_config=url_config)
                         frontier_url = FrontierUrl(
-                            url=url_config['url'],
-                            category=category['name'],
-                            url_type=UrlType(url_config['type']),
-                            max_depth=url_config['max_depth'],
-                            target_patterns=url_config.get('target_patterns'),
-                            seed_pattern=url_config.get('seed_pattern')
+                            url=url_config.url,
+                            category=category.name,
+                            url_type=UrlType(url_config.type),
+                            max_depth=url_config.max_depth,
+                            target_patterns=url_config.target_patterns,
+                            seed_pattern=url_config.seed_pattern
                         )
                         urls_to_create.append(frontier_url)
                 
@@ -81,13 +87,13 @@ class CrawlerApp:
                     batch = FrontierBatch(urls=urls_to_create)
                     await self.frontier_crud.create_urls_batch(batch)
                     
-                    self.logger.info(
+                    logfire.info(
                         "Frontier initialized",
                         urls_count=len(urls_to_create)
                     )
                 
             except Exception as e:
-                self.logger.error("Error initializing frontier", error=str(e))
+                logfire.error("Error initializing frontier", error=str(e))
                 raise
 
     async def run_crawler(self):
@@ -102,10 +108,10 @@ class CrawlerApp:
                 
                 await crawler.run(self.db_connection)
                 
-                self.logger.info("Crawler execution completed")
+                logfire.info("Crawler execution completed")
                 
             except Exception as e:
-                self.logger.error("Error during crawler execution", error=str(e))
+                logfire.error("Error during crawler execution", error=str(e))
                 raise
 
     async def cleanup(self):
@@ -113,7 +119,7 @@ class CrawlerApp:
         with logfire.span('cleanup'):
             if self.db_connection:
                 self.db_connection.close()
-                self.logger.info("Database connection closed")
+                logfire.info("Database connection closed")
 
     async def run(self):
         """Main application execution flow."""
@@ -124,18 +130,10 @@ class CrawlerApp:
                 await self.initialize_frontier()
                 await self.run_crawler()
                 
-                self.logger.info("Application completed successfully")
+                logfire.info("Application completed successfully")
                 
             except Exception as e:
-                self.logger.error("Application failed", error=str(e))
+                logfire.error("Application failed", error=str(e))
                 raise
             finally:
                 await self.cleanup()
-
-async def main():
-    """Entry point for the application."""
-    app = CrawlerApp()
-    await app.run()
-
-if __name__ == "__main__":
-    asyncio.run(main())
