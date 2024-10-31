@@ -116,24 +116,7 @@ class ProjectDocumentor:
         with open(output_file, 'w', encoding='utf-8') as f:
             f.write('\n'.join(content))
         
-        # Create a compact version for LLMs
-        compact_content = [
-            "# Doccrawl - Project Analysis Request\n",
-            f"Generated on: {timestamp}\n",
-            "## Analysis Objectives\n",
-            "Please analyze this codebase focusing on:\n",
-            "1. Code architecture and organization\n",
-            "2. Dependency management and requirements\n",
-            "3. Implementation of Python best practices\n",
-            "4. Potential improvements and optimizations\n",
-            "5. Security considerations\n",
-            "6. Scalability aspects\n\n",
-            self.get_tree(),
-            self.get_code_contents()
-        ]
-        
-        with open('llm_analysis.md', 'w', encoding='utf-8') as f:
-            f.write('\n'.join(compact_content))
+       
 
 if __name__ == "__main__":
     documentor = ProjectDocumentor()

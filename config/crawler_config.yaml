@@ -56,77 +56,97 @@
 
 crawler:
   default_settings:
-    request_delay: 1.0  # Delay between requests in seconds
-    timeout: 30  # Request timeout in seconds
+    request_delay: 1.0
+    timeout: 30
 
   categories:
-    - name: "documenti_ministeriali"
-      description: "Documenti e circolari ministeriali"
+    - name: "Roma La Sapienza"
+      description: "Borse di studio e premi di laurea Sapienza"
       urls:
-        # Type 0: Direct target URL example
-        - url: "https://example.com/docs/circolare123.pdf"
-          type: 0
-          target_patterns:
-            - ".*\.pdf$"
-          max_depth: 0
-          
-        # Type 1: Single page with target URLs
-        - url: "https://example.com/documenti-2024"
-          type: 1
-          target_patterns:
-            - ".*\.pdf$"
-            - ".*/doc/circolare-\d+$"
-          max_depth: 0
-          
-        # Type 2: Page with both target and seed URLs
-        - url: "https://example.com/archivio-circolari"
-          type: 2
-          target_patterns:
-            - ".*\.pdf$"
-            - ".*/circolari/\d{4}/\d+$"
-          seed_pattern: "/archivio-circolari/\d{4}/$"
-          max_depth: 1
-          
-        # Type 3: Complex crawling with AI assistance at depth 1
-        - url: "https://example.com/amministrazione"
+        - url: "https://www.uniroma1.it/it/pagina/premi-tesi-borse-di-studio-e-altre-opportunita?page=1"
           type: 3
           target_patterns:
             - ".*\.pdf$"
-            - ".*/documento/[a-zA-Z0-9-]+$"
-          seed_pattern: "/amministrazione/[a-zA-Z0-9-]+/$"
+          seed_pattern: "https://www.uniroma1.it/it/borsa-di-studio"
           max_depth: 2
-          
-        # Type 4: Full AI-assisted crawling
-        - url: "https://example.com/portale"
-          type: 4
-          target_patterns:
-            - ".*\.pdf$"
-            - ".*/files/.*documento.*"
-          max_depth: 3
 
-    - name: "documenti_tecnici"
-      description: "Documentazione tecnica e specifiche"
+        - url: "https://www.uniroma1.it/it/pagina/premi-tesi-borse-di-studio-e-altre-opportunita?page=2"
+          type: 3
+          target_patterns:
+            - ".*\.pdf$"
+          seed_pattern: "https://www.uniroma1.it/it/borsa-di-studio"
+          max_depth: 2
+
+        - url: "https://www.uniroma1.it/it/pagina/premi-tesi-borse-di-studio-e-altre-opportunita?page=3"
+          type: 3
+          target_patterns:
+            - ".*\.pdf$"
+          seed_pattern: "https://www.uniroma1.it/it/borsa-di-studio"
+          max_depth: 2
+
+        - url: "https://www.uniroma1.it/it/pagina/premi-tesi-borse-di-studio-e-altre-opportunita"
+          type: 3
+          target_patterns:
+            - ".*\.pdf$"
+          seed_pattern: "https://www.uniroma1.it/it/borsa-di-studio"
+          max_depth: 2
+
+    - name: "Bologna"
+      description: "Borse di studio e premi di laurea UniBo"
       urls:
-        - url: "https://example.com/specs/technical_doc_v1.pdf"
-          type: 0
-          target_patterns:
-            - ".*\.pdf$"
-          max_depth: 0
-          
-        - url: "https://example.com/technical-library"
-          type: 1
-          target_patterns:
-            - ".*\.pdf$"
-            - ".*/technical-specs/.*"
-          max_depth: 0
-          
-        - url: "https://example.com/documentation"
+        - url: "https://bandi.unibo.it/agevolazioni/premi-laurea"
           type: 2
           target_patterns:
             - ".*\.pdf$"
-            - ".*/docs/v\d+/.*"
-          seed_pattern: "/documentation/section-.*/$"
           max_depth: 1
+
+        - url: "https://bandi.unibo.it/agevolazioni/borse?b_start:int=20"
+          type: 2
+          target_patterns:
+            - ".*\.pdf$"
+          max_depth: 1
+
+        - url: "https://bandi.unibo.it/agevolazioni/borse"
+          type: 2
+          target_patterns:
+            - ".*\.pdf$"
+          max_depth: 1
+
+        - url: "https://bandi.unibo.it/agevolazioni/borse?b_start:int=10"
+          type: 2
+          target_patterns:
+            - ".*\.pdf$"
+          max_depth: 1
+
+    - name: "Torino"
+      description: "Borse di studio e premi di laurea UniTo"
+      urls:
+        - url: "https://webapps.unito.it/concorsiweb/visualizzaperweb.php?tipo=25&p=y&C7=all&criterio35=A&criterio46=No"
+          type: 1
+          target_patterns:
+            - ".*\.pdf$"
+          max_depth: 0
+
+        - url: "https://webapps.unito.it/concorsiweb/visualizzaperweb.php?tipo=24&p=y&C7=all&criterio35=A&criterio46=No"
+          type: 1
+          target_patterns:
+            - ".*\.pdf$"
+          max_depth: 0
+
+        - url: "https://webapps.unito.it/concorsiweb/visualizzaperweb.php?tipo=24&p=y&C7=all&criterio35=A&criterio46=Si"
+          type: 1
+          target_patterns:
+            - ".*\.pdf$"
+          max_depth: 0
+
+    - name: "Napoli Federico II"
+      description: "Borse di studio e premi di laurea UniNa"
+      urls:
+        - url: "https://www.unina.it/ateneo/concorsi/borse-di-studio"
+          type: 1
+          target_patterns:
+            - ".*\.pdf$"
+          max_depth: 0
 
 database:
   frontier_table: "url_frontier"

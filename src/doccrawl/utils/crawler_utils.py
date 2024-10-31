@@ -1,5 +1,5 @@
 # src/utils/crawler_utils.py
-from typing import Set, Dict, Any, Optional, Tuple
+from typing import List, Set, Dict, Any, Optional, Tuple
 import re
 from urllib.parse import urlparse, urljoin, urlunparse
 import logfire

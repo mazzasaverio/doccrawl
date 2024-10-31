@@ -1,0 +1,38 @@
+version: '3.8'
+
+services:
+  crawler:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    environment:
+      - POSTGRES_HOST=db
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DATABASE=${POSTGRES_DATABASE}
+      - POSTGRES_SSLMODE=${POSTGRES_SSLMODE:-prefer}
+      - SCRAPEGRAPH_API_KEY=${SCRAPEGRAPH_API_KEY}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - MAX_CONCURRENT_PAGES=${MAX_CONCURRENT_PAGES:-5}
+      - BATCH_SIZE=${BATCH_SIZE:-10}
+    volumes:
+      - ../logs:/app/logs
+      - ../config:/app/config
+    depends_on:
+      - db
+    command: python -m src.main
+
+  db:
+    image: postgres:15-alpine
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DATABASE}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+volumes:
+  postgres_data:
