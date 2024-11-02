@@ -1,10 +1,11 @@
 # src/doccrawl/crud/frontier_crud.py
+
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 from urllib.parse import urlparse
 
 from .base_crud import BaseCRUD
-from ..models.frontier_model import FrontierUrl, UrlStatus, FrontierStatistics, FrontierBatch
+from ..models.frontier_model import FrontierStatistics, FrontierUrl, UrlType, UrlStatus, FrontierBatch
 
 class FrontierCRUD(BaseCRUD):
     """CRUD operations for the URL frontier table."""
@@ -13,13 +14,8 @@ class FrontierCRUD(BaseCRUD):
         super().__init__(conn)
         self.table = "url_frontier"
 
-    def create_urls_batch(self, batch: FrontierBatch) -> None:
-        """
-        Create multiple URL entries in batch.
-        
-        Args:
-            batch: FrontierBatch model containing multiple URLs
-        """
+    async def create_urls_batch(self, batch: FrontierBatch) -> None:
+        """Create multiple URL entries in batch."""
         now = datetime.now()
         columns = [
             'url', 'category', 'url_type', 'depth', 'main_domain',
@@ -29,52 +25,48 @@ class FrontierCRUD(BaseCRUD):
         
         values = []
         for url_chunk in batch.chunk_urls():
-            chunk_values = []
             for frontier_url in url_chunk:
-                # Convertiamo i valori Pydantic in tipi Python nativi
+                # Convert Pydantic model to dict
                 data = frontier_url.model_dump()
                 
-                # Convertiamo esplicitamente l'URL in stringa
-                data['url'] = str(data['url'])
-                if data.get('parent_url'):
-                    data['parent_url'] = str(data['parent_url'])
-                
-                # Creiamo la tupla di valori nell'ordine corretto
+                # Create row with converted URL fields
                 row = (
-                    data['url'],                              # url
-                    data['category'],                         # category
-                    data['url_type'].value,                   # url_type (convertiamo l'enum nel suo valore)
-                    data['depth'],                            # depth
-                    data['main_domain'],                      # main_domain
-                    data.get('target_patterns'),              # target_patterns
-                    data.get('seed_pattern'),                 # seed_pattern
-                    data['max_depth'],                        # max_depth
-                    data['is_target'],                        # is_target
-                    data.get('parent_url'),                   # parent_url
-                    now,                                      # insert_date
-                    now,                                      # last_update
-                    UrlStatus.PENDING.value                   # status
+                    str(data['url']),                         # Convert HttpUrl to str
+                    data['category'],
+                    data['url_type'].value,                   # Convert enum to value
+                    data['depth'],
+                    data['main_domain'],
+                    data.get('target_patterns'),
+                    data.get('seed_pattern'),
+                    data['max_depth'],
+                    data['is_target'],
+                    str(data['parent_url']) if data.get('parent_url') else None,  # Convert optional HttpUrl
+                    now,
+                    now,
+                    UrlStatus.PENDING.value                   # Convert enum to value
                 )
-                chunk_values.append(row)
-            values.extend(chunk_values)
+                values.append(row)
         
-        self.insert_many(self.table, columns, values)
+        await self.insert_many(self.table, columns, values)
 
-    def create_url(self, frontier_url: FrontierUrl) -> int:
-        """
-        Create a new URL entry in the frontier.
-        
-        Args:
-            frontier_url: FrontierUrl model instance
-            
-        Returns:
-            ID of the created record
-        """
+    async def create_url(self, frontier_url: FrontierUrl) -> int:
+        """Create a new URL entry in the frontier."""
         data = frontier_url.model_dump(exclude={'id'})
+        
+        # Convert HttpUrl fields to strings
+        data['url'] = str(data['url'])
+        if data.get('parent_url'):
+            data['parent_url'] = str(data['parent_url'])
+            
+        # Convert enums to values
+        data['url_type'] = data['url_type'].value
+        data['status'] = data['status'].value
+        
+        # Add timestamps
         data['insert_date'] = datetime.now()
         data['last_update'] = datetime.now()
         
-        return self.insert_one(self.table, data)
+        return await self.insert_one(self.table, data)
 
     def create_urls_batch(self, batch: FrontierBatch) -> None:
         """

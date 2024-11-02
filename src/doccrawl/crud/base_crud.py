@@ -1,45 +1,25 @@
-# src/crud/base_crud.py
+# src/doccrawl/crud/base_crud.py
 from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime
 import logfire
 from psycopg2.extras import execute_values, DictCursor
 
 class BaseCRUD:
-    """
-    Base CRUD operations for database interactions.
-    Provides generic database operations that can be used across different tables.
-    """
+    """Base CRUD operations for database interactions."""
     
     def __init__(self, conn):
-        """
-        Initialize BaseCRUD with a database connection.
-        
-        Args:
-            conn: psycopg2 connection object
-        """
         self.conn = conn
         self.logger = logfire
 
-    def insert_one(
+    async def insert_one(
         self, 
         table: str, 
         data: Dict[str, Any], 
         return_id: bool = True
     ) -> Optional[int]:
-        """
-        Insert a single record into specified table.
-        
-        Args:
-            table: Table name
-            data: Dictionary of column names and values
-            return_id: Whether to return the ID of the inserted record
-        
-        Returns:
-            The ID of the inserted record if return_id is True
-        """
+        """Insert a single record into specified table."""
         with self.conn.cursor() as cur:
             try:
-                # Filter out None values unless explicitly needed
                 filtered_data = {k: v for k, v in data.items() if v is not None}
                 
                 columns = list(filtered_data.keys())
@@ -77,25 +57,10 @@ class BaseCRUD:
                 )
                 raise
 
-    def insert_many(
-        self, 
-        table: str, 
-        columns: List[str], 
-        values: List[Tuple],
-        page_size: int = 1000
-    ) -> None:
-        """
-        Insert multiple records into specified table with pagination.
-        
-        Args:
-            table: Table name
-            columns: List of column names
-            values: List of tuples containing values
-            page_size: Number of records to insert at once
-        """
+    async def insert_many(self, table: str, columns: List[str], values: List[Tuple], page_size: int = 1000) -> None:
+        """Insert multiple records into specified table with pagination."""
         with self.conn.cursor() as cur:
             try:
-                # Insert in batches to handle large datasets
                 for i in range(0, len(values), page_size):
                     batch = values[i:i + page_size]
                     query = f"""
@@ -103,7 +68,6 @@ class BaseCRUD:
                     ({', '.join(columns)}) 
                     VALUES %s
                     """
-                    
                     execute_values(cur, query, batch)
                     self.conn.commit()
                 
@@ -123,32 +87,19 @@ class BaseCRUD:
                 )
                 raise
 
-    def update(
+    async def update(
         self, 
         table: str, 
         conditions: Dict[str, Any], 
         data: Dict[str, Any],
         return_updated: bool = False
     ) -> Optional[List[Dict]]:
-        """
-        Update records that match the conditions.
-        
-        Args:
-            table: Table name
-            conditions: Dictionary of column names and values for WHERE clause
-            data: Dictionary of columns to update with new values
-            return_updated: Whether to return the updated records
-            
-        Returns:
-            List of updated records if return_updated is True
-        """
+        """Update records that match the conditions."""
         with self.conn.cursor(cursor_factory=DictCursor) as cur:
             try:
-                # Prepare SET clause
                 set_items = [f"{k} = %s" for k in data.keys()]
                 set_values = list(data.values())
                 
-                # Prepare WHERE clause
                 where_items = [f"{k} = %s" for k in conditions.keys()]
                 where_values = list(conditions.values())
                 
@@ -184,7 +135,7 @@ class BaseCRUD:
                 )
                 raise
 
-    def select(
+    async def select(
         self,
         table: str,
         conditions: Optional[Dict[str, Any]] = None,
@@ -193,28 +144,13 @@ class BaseCRUD:
         limit: Optional[int] = None,
         offset: Optional[int] = None
     ) -> List[Dict]:
-        """
-        Select records based on conditions with pagination support.
-        
-        Args:
-            table: Table name
-            conditions: Optional dictionary of column names and values for WHERE clause
-            columns: Optional list of columns to select
-            order_by: Optional string for ORDER BY clause
-            limit: Optional integer for LIMIT clause
-            offset: Optional integer for OFFSET clause
-        
-        Returns:
-            List of dictionaries representing the selected records
-        """
+        """Select records based on conditions with pagination support."""
         with self.conn.cursor(cursor_factory=DictCursor) as cur:
             try:
-                # Build SELECT clause
                 select_clause = '*' if not columns else ', '.join(columns)
                 query_parts = [f"SELECT {select_clause} FROM {table}"]
                 values = []
                 
-                # Build WHERE clause if conditions provided
                 if conditions:
                     where_conditions = []
                     for k, v in conditions.items():
@@ -230,7 +166,6 @@ class BaseCRUD:
                     if where_conditions:
                         query_parts.append("WHERE " + " AND ".join(where_conditions))
                 
-                # Add optional clauses
                 if order_by:
                     query_parts.append(f"ORDER BY {order_by}")
                 if limit is not None:
@@ -260,61 +195,8 @@ class BaseCRUD:
                 )
                 raise
 
-    def delete(self, table: str, conditions: Dict[str, Any]) -> int:
-        """
-        Delete records based on conditions.
-        
-        Args:
-            table: Table name
-            conditions: Dictionary of column names and values for WHERE clause
-        
-        Returns:
-            Number of records deleted
-        """
-        with self.conn.cursor() as cur:
-            try:
-                where_items = [f"{k} = %s" for k in conditions.keys()]
-                values = list(conditions.values())
-                
-                query = f"""
-                DELETE FROM {table} 
-                WHERE {' AND '.join(where_items)}
-                RETURNING id
-                """
-                
-                cur.execute(query, values)
-                deleted_count = len(cur.fetchall())
-                self.conn.commit()
-                
-                self.logger.info(
-                    'Delete operation completed successfully',
-                    table=table,
-                    records_deleted=deleted_count
-                )
-                
-                return deleted_count
-                
-            except Exception as e:
-                self.conn.rollback()
-                self.logger.error(
-                    'Error deleting records',
-                    table=table,
-                    error=str(e),
-                    conditions=str(conditions)
-                )
-                raise
-
-    def exists(self, table: str, conditions: Dict[str, Any]) -> bool:
-        """
-        Check if records exist based on conditions.
-        
-        Args:
-            table: Table name
-            conditions: Dictionary of column names and values to check
-        
-        Returns:
-            Boolean indicating if matching record exists
-        """
+    async def exists(self, table: str, conditions: Dict[str, Any]) -> bool:
+        """Check if records exist based on conditions."""
         with self.conn.cursor() as cur:
             try:
                 where_items = [f"{k} = %s" for k in conditions.keys()]

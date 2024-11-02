@@ -9,8 +9,11 @@ from doccrawl.config.settings import settings
 from doccrawl.db.connection import DatabaseConnection
 from doccrawl.core.crawler import Crawler
 from doccrawl.models.frontier_model import FrontierUrl, UrlType, FrontierBatch, UrlStatus
+from doccrawl.models.config_url_log_model import ConfigUrlLog, ConfigUrlStatus
 from doccrawl.crud.frontier_crud import FrontierCRUD
+from doccrawl.crud.config_url_log_crud import ConfigUrlLogCRUD
 from doccrawl.utils.logging import setup_logging
+
 class CrawlerApp:
     """Main application class for document crawler."""
     
@@ -20,6 +23,7 @@ class CrawlerApp:
         self.config = None
         self.db_connection = None
         self.frontier_crud = None
+        self.config_log_crud = None
         self.crawler = None
 
     async def _init_crawler(self):
@@ -55,6 +59,7 @@ class CrawlerApp:
                 self.db_connection.connect()
                 self.db_connection.create_tables()
                 self.frontier_crud = FrontierCRUD(self.db_connection)
+                self.config_log_crud = ConfigUrlLogCRUD(self.db_connection)
                 logfire.info("Database initialized successfully")
             except Exception as e:
                 logfire.error("Database initialization failed", error=str(e))
@@ -62,7 +67,8 @@ class CrawlerApp:
 
     async def process_url_at_depth(
         self, 
-        frontier_url: FrontierUrl, 
+        frontier_url: FrontierUrl,
+        config_log_id: int,
         current_depth: int
     ) -> List[FrontierUrl]:
         """Process a single URL at a specific depth."""
@@ -77,6 +83,14 @@ class CrawlerApp:
             if self.crawler is None:
                 raise ValueError("Crawler is not initialized")
 
+            # Aggiorna profondità raggiunta nel log
+            if current_depth > frontier_url.depth:
+                await self.config_log_crud.update_status(
+                    config_log_id,
+                    ConfigUrlStatus.RUNNING,
+                    reached_depth=current_depth
+                )
+
             # Se l'URL ha un ID, aggiorna il suo stato
             if frontier_url.id is not None:
                 await self.frontier_crud.update_url_status(
@@ -87,7 +101,6 @@ class CrawlerApp:
             # Processa l'URL e ottieni nuovi URL
             new_urls = await self.crawler.process_single_url(frontier_url)
             
-            # Converti None in lista vuota se necessario
             if new_urls is None:
                 logfire.warning(
                     "Crawler returned None instead of empty list",
@@ -101,8 +114,9 @@ class CrawlerApp:
                 new_urls_found=len(new_urls)
             )
 
-            # Storicizza i nuovi URL trovati
+            # Storicizza i nuovi URL trovati e conta errori
             stored_urls = []
+            failed_count = 0
             for url in new_urls:
                 try:
                     if not await self.frontier_crud.exists_in_frontier(str(url.url)):
@@ -115,13 +129,25 @@ class CrawlerApp:
                             id=url_id
                         )
                 except Exception as store_error:
+                    failed_count += 1
                     logfire.error(
                         "Failed to store URL",
                         url=str(url.url),
                         error=str(store_error)
                     )
+                    
+            # Aggiorna contatori nel log
+            target_count = len([u for u in stored_urls if u.is_target])
+            seed_count = len([u for u in stored_urls if not u.is_target])
+            
+            await self.config_log_crud.increment_counters(
+                config_log_id,
+                target_urls=target_count,
+                seed_urls=seed_count,
+                failed_urls=failed_count
+            )
 
-            # Aggiorna lo stato dell'URL processato se ha un ID
+            # Aggiorna lo stato dell'URL processato
             if frontier_url.id is not None:
                 await self.frontier_crud.update_url_status(
                     frontier_url.id, 
@@ -137,15 +163,22 @@ class CrawlerApp:
                 depth=current_depth,
                 error=str(e)
             )
+            
             if frontier_url.id is not None:
                 await self.frontier_crud.update_url_status(
                     frontier_url.id,
                     UrlStatus.FAILED,
                     error_message=str(e)
                 )
+                
+            # Registra warning nel log di configurazione
+            await self.config_log_crud.add_warning(
+                config_log_id,
+                f"Failed to process URL {frontier_url.url} at depth {current_depth}: {str(e)}"
+            )
             return []
 
-    async def process_url_recursively(self, config_url: FrontierUrl):
+    async def process_url_recursively(self, config_url: FrontierUrl, config_log_id: int):
         """Process a URL recursively up to its maximum depth."""
         try:
             current_depth = 0
@@ -162,7 +195,11 @@ class CrawlerApp:
                 next_level_urls = []
                 for url in urls_to_process:
                     if url.depth == current_depth:
-                        new_urls = await self.process_url_at_depth(url, current_depth)
+                        new_urls = await self.process_url_at_depth(
+                            url,
+                            config_log_id,
+                            current_depth
+                        )
                         next_level_urls.extend(new_urls)
                 
                 if not next_level_urls:
@@ -181,6 +218,13 @@ class CrawlerApp:
                 starting_url=str(config_url.url),
                 error=str(e)
             )
+            
+            # Aggiorna il log con l'errore
+            await self.config_log_crud.update_status(
+                config_log_id,
+                ConfigUrlStatus.FAILED,
+                error_message=str(e)
+            )
             raise
 
     async def run_crawler(self):
@@ -188,13 +232,7 @@ class CrawlerApp:
         with logfire.span('run_crawler'):
             try:
                 await self._init_crawler()
-                # Initialize crawler
-                self.crawler = Crawler(
-                    scrapegraph_api_key=settings.scrapegraph_api_key,
-                    max_concurrent_pages=settings.crawler.max_concurrent_pages,
-                    batch_size=settings.crawler.batch_size
-                )
-
+                
                 # Process each category
                 for category in self.config['crawler']['categories']:
                     logfire.info(
@@ -214,6 +252,18 @@ class CrawlerApp:
                             seed_pattern=url_config.seed_pattern
                         )
                         
+                        # Crea log entry per questo URL di configurazione
+                        config_log = ConfigUrlLog(
+                            url=str(config_url.url),  # Converti l'URL in stringa
+                            category=config_url.category,
+                            url_type=config_url.url_type.value,
+                            max_depth=config_url.max_depth,
+                            target_patterns=config_url.target_patterns,
+                            seed_pattern=config_url.seed_pattern
+                        )
+                        
+                        log_id = await self.config_log_crud.create_log(config_log)
+                        
                         logfire.info(
                             "Starting config URL processing",
                             url=str(config_url.url),
@@ -221,12 +271,32 @@ class CrawlerApp:
                             max_depth=config_url.max_depth
                         )
                         
-                        await self.process_url_recursively(config_url)
-                        
-                        logfire.info(
-                            "Config URL processing completed",
-                            url=str(config_url.url)
-                        )
+                        try:
+                            # Marca l'inizio dell'elaborazione
+                            await self.config_log_crud.start_processing(log_id)
+                            
+                            # Processa l'URL
+                            await self.process_url_recursively(config_url, log_id)
+                            
+                            # Marca come completato
+                            await self.config_log_crud.update_status(
+                                log_id,
+                                ConfigUrlStatus.COMPLETED
+                            )
+                            
+                            logfire.info(
+                                "Config URL processing completed",
+                                url=str(config_url.url)
+                            )
+                            
+                        except Exception as e:
+                            # In caso di errore, marca come fallito
+                            await self.config_log_crud.update_status(
+                                log_id,
+                                ConfigUrlStatus.FAILED,
+                                error_message=str(e)
+                            )
+                            raise
 
                 logfire.info("All categories processed successfully")
                 

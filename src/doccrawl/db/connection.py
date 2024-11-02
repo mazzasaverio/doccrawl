@@ -1,3 +1,4 @@
+# src/doccrawl/db/connection.py
 """Database connection module."""
 import psycopg2
 from psycopg2.extras import DictCursor
@@ -16,7 +17,6 @@ class DatabaseConnection:
         try:
             db_settings = settings.database
             
-            # Log connection attempt (senza password)
             logfire.info(
                 "Attempting database connection",
                 host=db_settings.host,
@@ -79,11 +79,46 @@ class DatabaseConnection:
                         error_message TEXT
                     );
                     
-                    -- Create indexes for better performance
                     CREATE INDEX IF NOT EXISTS idx_url_frontier_url ON url_frontier(url);
                     CREATE INDEX IF NOT EXISTS idx_url_frontier_status ON url_frontier(status);
                     CREATE INDEX IF NOT EXISTS idx_url_frontier_category ON url_frontier(category);
                 """)
+
+                # Create config url logs table
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS config_url_logs (
+                        id SERIAL PRIMARY KEY,
+                        url TEXT NOT NULL,
+                        category VARCHAR(255) NOT NULL,
+                        status VARCHAR(20) NOT NULL DEFAULT 'pending',
+                        
+                        start_time TIMESTAMP WITH TIME ZONE,
+                        end_time TIMESTAMP WITH TIME ZONE,
+                        processing_duration FLOAT,
+                        
+                        total_urls_found INTEGER NOT NULL DEFAULT 0,
+                        target_urls_found INTEGER NOT NULL DEFAULT 0,
+                        seed_urls_found INTEGER NOT NULL DEFAULT 0,
+                        failed_urls INTEGER NOT NULL DEFAULT 0,
+                        
+                        error_message TEXT,
+                        warning_messages TEXT[],
+                        
+                        url_type INTEGER NOT NULL,
+                        max_depth INTEGER NOT NULL,
+                        reached_depth INTEGER NOT NULL DEFAULT 0,
+                        target_patterns TEXT[],
+                        seed_pattern TEXT,
+                        
+                        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                    );
+                    
+                    CREATE INDEX IF NOT EXISTS idx_config_url_logs_category ON config_url_logs(category);
+                    CREATE INDEX IF NOT EXISTS idx_config_url_logs_status ON config_url_logs(status);
+                    CREATE INDEX IF NOT EXISTS idx_config_url_logs_url ON config_url_logs(url);
+                """)
+
                 self.conn.commit()
                 logfire.info("Successfully created/verified tables")
                 
