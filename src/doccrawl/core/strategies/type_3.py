@@ -1,69 +1,73 @@
-
 # src/core/strategies/type_3.py
 from typing import List, Set, Tuple
 import logfire
+from playwright.async_api import TimeoutError as PlaywrightTimeout
 
 from .base_strategy import CrawlerStrategy
 from ...models.frontier_model import FrontierUrl
-from ...utils.crawler_utils import CrawlerUtils
 
 class Type3Strategy(CrawlerStrategy):
     """
-    Strategy for Type 3 URLs (three-level crawling with AI assistance).
+    Strategy for Type 3 URLs with AI assistance.
     
     Depth 0: Uses regex patterns
     Depth 1: Uses ScrapegraphAI
     Depth 2: Only collects targets
     """
     
-    async def _process_depth_0(self, frontier_url: FrontierUrl) -> List[FrontierUrl]:
+    async def _process_depth_0(
+        self, 
+        frontier_url: FrontierUrl
+    ) -> List[FrontierUrl]:
         """Process initial page using regex patterns."""
         try:
-            response = await self.page.goto(str(frontier_url.url))
-            if not await CrawlerUtils.is_valid_response(response):
-                return []
-                
-            await CrawlerUtils.wait_for_page_load(self.page)
-            
-            # Extract links using patterns
-            all_urls = await CrawlerUtils.extract_links_from_page(
-                self.page,
-                str(frontier_url.url)
+            self.logger.info(
+                "Processing depth 0",
+                url=str(frontier_url.url)
             )
             
+            # Navigate and wait for page
+            response = await self.page.goto(str(frontier_url.url))
+            if not response or response.status != 200:
+                return []
+
+            await self._wait_for_page_ready()
+            await self._handle_dynamic_elements()
+            
+            # Get all URLs
+            all_urls = await self._get_page_urls()
             new_urls = []
-            
-            # Find target URLs
-            target_urls = {
-                url for url in all_urls
-                if CrawlerUtils.matches_patterns(url, frontier_url.target_patterns)
-            }
-            
-            # Find seed URLs
-            seed_urls = {
-                url for url in all_urls
-                if frontier_url.seed_pattern and 
-                CrawlerUtils.matches_patterns(url, [frontier_url.seed_pattern])
-            }
-            
-            # Create frontier URLs
-            for url in target_urls:
-                if not self.frontier_crud.exists_in_frontier(url):
-                    new_urls.append(self.create_frontier_url(
-                        url=url,
-                        parent=frontier_url,
-                        is_target=True
-                    ))
+
+            # Process URLs
+            for url in all_urls:
+                # Skip self-referential URLs
+                if url == str(frontier_url.url):
+                    continue
                     
-            for url in seed_urls:
-                if not self.frontier_crud.exists_in_frontier(url):
-                    new_urls.append(self.create_frontier_url(
-                        url=url,
-                        parent=frontier_url
-                    ))
-                    
+                # Check for target URLs
+                if frontier_url.target_patterns and \
+                   self._is_target_url(url, frontier_url.target_patterns):
+                    if not self.frontier_crud or \
+                       not await self.frontier_crud.exists_in_frontier(url):
+                        new_urls.append(self.create_frontier_url(
+                            url=url,
+                            parent=frontier_url,
+                            is_target=True
+                        ))
+                        
+                # Check for seed URLs
+                elif frontier_url.seed_pattern and \
+                     self._matches_pattern(url, frontier_url.seed_pattern):
+                    if not self.frontier_crud or \
+                       not await self.frontier_crud.exists_in_frontier(url):
+                        new_urls.append(self.create_frontier_url(
+                            url=url,
+                            parent=frontier_url,
+                            is_target=False
+                        ))
+                        
             return new_urls
-            
+
         except Exception as e:
             self.logger.error(
                 "Error processing depth 0",
@@ -71,41 +75,51 @@ class Type3Strategy(CrawlerStrategy):
                 error=str(e)
             )
             return []
-    
-    async def _process_depth_1(self, frontier_url: FrontierUrl) -> List[FrontierUrl]:
-        """Process page using ScrapegraphAI."""
+
+    async def _process_depth_1(
+        self,
+        frontier_url: FrontierUrl
+    ) -> List[FrontierUrl]:
+        """Process page using ScrapegraphAI at depth 1."""
         try:
-            response = await self.page.goto(str(frontier_url.url))
-            if not await CrawlerUtils.is_valid_response(response):
-                return []
-                
-            await CrawlerUtils.wait_for_page_load(self.page)
-            
-            # Use ScrapegraphAI to identify URLs
-            target_urls, seed_urls = await CrawlerUtils.analyze_with_scrapegraph(
-                self.page,
-                self.scrapegraph_api_key,
-                'extract_links'
+            self.logger.info(
+                "Processing depth 1 with AI",
+                url=str(frontier_url.url)
             )
+            
+            response = await self.page.goto(str(frontier_url.url))
+            if not response or response.status != 200:
+                return []
+
+            await self._wait_for_page_ready()
+            await self._handle_dynamic_elements()
+            
+            # Analyze with ScrapegraphAI
+            target_urls, seed_urls = await self._analyze_with_scrapegraph()
             
             new_urls = []
             
-            # Create frontier URLs
+            # Process target URLs
             for url in target_urls:
-                if not self.frontier_crud.exists_in_frontier(url):
+                if not self.frontier_crud or \
+                   not await self.frontier_crud.exists_in_frontier(url):
                     new_urls.append(self.create_frontier_url(
                         url=url,
                         parent=frontier_url,
                         is_target=True
                     ))
-                    
-            for url in seed_urls:
-                if not self.frontier_crud.exists_in_frontier(url):
-                    new_urls.append(self.create_frontier_url(
-                        url=url,
-                        parent=frontier_url
-                    ))
-                    
+
+            # Process seed URLs if not at max depth
+            if frontier_url.depth < frontier_url.max_depth - 1:
+                for url in seed_urls:
+                    if not self.frontier_crud or \
+                       not await self.frontier_crud.exists_in_frontier(url):
+                        new_urls.append(self.create_frontier_url(
+                            url=url,
+                            parent=frontier_url,
+                            is_target=False
+                        ))
+            
             return new_urls
             
         except Exception as e:
@@ -115,38 +129,44 @@ class Type3Strategy(CrawlerStrategy):
                 error=str(e)
             )
             return []
-    
-    async def _process_depth_2(self, frontier_url: FrontierUrl) -> List[FrontierUrl]:
+
+    async def _process_depth_2(
+        self, 
+        frontier_url: FrontierUrl
+    ) -> List[FrontierUrl]:
         """Process final depth, collecting only target URLs."""
         try:
-            response = await self.page.goto(str(frontier_url.url))
-            if not await CrawlerUtils.is_valid_response(response):
-                return []
-                
-            await CrawlerUtils.wait_for_page_load(self.page)
-            
-            # Extract all links
-            all_urls = await CrawlerUtils.extract_links_from_page(
-                self.page,
-                str(frontier_url.url)
+            self.logger.info(
+                "Processing depth 2",
+                url=str(frontier_url.url)
             )
             
-            # Filter target URLs
-            target_urls = {
-                url for url in all_urls
-                if CrawlerUtils.matches_patterns(url, frontier_url.target_patterns)
-            }
+            response = await self.page.goto(str(frontier_url.url))
+            if not response or response.status != 200:
+                return []
+
+            await self._wait_for_page_ready()
+            await self._handle_dynamic_elements()
             
-            # Create frontier URLs for targets
+            # Get all URLs including file URLs
+            all_urls = await self._get_page_urls()
+            file_urls = await self._extract_file_urls()
+            all_urls.update(file_urls)
+            
             new_urls = []
-            for url in target_urls:
-                if not self.frontier_crud.exists_in_frontier(url):
-                    new_urls.append(self.create_frontier_url(
-                        url=url,
-                        parent=frontier_url,
-                        is_target=True
-                    ))
-                    
+
+            # At this depth, only collect target URLs
+            for url in all_urls:
+                if frontier_url.target_patterns and \
+                   self._is_target_url(url, frontier_url.target_patterns):
+                    if not self.frontier_crud or \
+                       not await self.frontier_crud.exists_in_frontier(url):
+                        new_urls.append(self.create_frontier_url(
+                            url=url,
+                            parent=frontier_url,
+                            is_target=True
+                        ))
+                        
             return new_urls
             
         except Exception as e:
@@ -156,7 +176,7 @@ class Type3Strategy(CrawlerStrategy):
                 error=str(e)
             )
             return []
-    
+
     async def execute(self, frontier_url: FrontierUrl) -> List[FrontierUrl]:
         """
         Execute Type 3 strategy based on current depth.
@@ -168,6 +188,17 @@ class Type3Strategy(CrawlerStrategy):
             List of discovered URLs
         """
         try:
+            self.logger.info(
+                "Executing Type 3 strategy",
+                url=str(frontier_url.url),
+                depth=frontier_url.depth
+            )
+
+            if not frontier_url.target_patterns:
+                self.logger.error("No target patterns specified")
+                return []
+
+            # Process based on depth
             if frontier_url.depth == 0:
                 return await self._process_depth_0(frontier_url)
             elif frontier_url.depth == 1:
@@ -177,7 +208,6 @@ class Type3Strategy(CrawlerStrategy):
             else:
                 self.logger.error(
                     "Invalid depth for Type 3 URL",
-                    url=str(frontier_url.url),
                     depth=frontier_url.depth
                 )
                 return []

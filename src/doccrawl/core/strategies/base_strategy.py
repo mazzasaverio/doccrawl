@@ -1,10 +1,12 @@
-# src/core/strategies/base_strategy.py
+#src/core/strategies/base_strategy.py
 from abc import ABC, abstractmethod
-from typing import List, Optional, Set
+from typing import List, Optional, Set, Tuple
 import re
 from urllib.parse import urljoin, urlparse
 import logfire
-from playwright.sync_api import Page
+from playwright.async_api import Page
+
+from doccrawl.utils.crawler_utils import CrawlerUtils
 
 from ...models.frontier_model import FrontierUrl, UrlType
 from ...crud.frontier_crud import FrontierCRUD
@@ -14,7 +16,7 @@ class CrawlerStrategy(ABC):
     
     def __init__(
         self,
-        frontier_crud: FrontierCRUD,
+        frontier_crud: Optional[FrontierCRUD],
         playwright_page: Page,
         scrapegraph_api_key: Optional[str] = None
     ):
@@ -22,7 +24,8 @@ class CrawlerStrategy(ABC):
         self.page = playwright_page
         self.scrapegraph_api_key = scrapegraph_api_key
         self.logger = logfire
-        
+        self.utils = CrawlerUtils()
+    
     @abstractmethod
     async def execute(self, frontier_url: FrontierUrl) -> List[FrontierUrl]:
         """
@@ -33,56 +36,174 @@ class CrawlerStrategy(ABC):
             
         Returns:
             List of new FrontierUrl instances discovered
+        
+        Raises:
+            NotImplementedError: If the strategy is not implemented
         """
         pass
-    
-    def _is_valid_url(self, url: str) -> bool:
-        """Validate URL format and scheme."""
+
+    async def _handle_dynamic_elements(self):
+        """Handle common dynamic page elements like popups, cookies, and load more buttons."""
         try:
-            result = urlparse(url)
-            return all([result.scheme, result.netloc]) and result.scheme in ['http', 'https']
-        except Exception:
-            return False
+            # Gestione cookie e privacy banners
+            cookie_selectors = [
+                '[id*="cookie"]', 
+                '[id*="privacy"]',
+                '[id*="gdpr"]',
+                'button:has-text("Accetta")',
+                'button:has-text("Accept")',
+                'button[onclick*="cookiesPolicy"]'
+            ]
+            for selector in cookie_selectors:
+                try:
+                    button = await self.page.wait_for_selector(selector, timeout=2000)
+                    if button:
+                        await button.click()
+                        self.logger.debug(f"Clicked cookie/privacy button: {selector}")
+                        # Attendi che il banner scompaia
+                        await self.page.wait_for_timeout(1000)
+                        break
+                except:
+                    continue
+
+            # Gestione pulsanti di caricamento
+            load_more_selectors = [
+                'button:has-text("carica")', 
+                'button:has-text("load")',
+                'button:has-text("più")',
+                'button:has-text("more")',
+                '[class*="load-more"]',
+                'text="carica altri"'
+            ]
             
-    def _matches_pattern(self, url: str, pattern: str) -> bool:
-        """Check if URL matches a regex pattern."""
-        try:
-            return bool(re.match(pattern, url))
-        except re.error as e:
-            self.logger.error(
-                "Invalid regex pattern",
-                pattern=pattern,
+            max_clicks = 5  # Limite di sicurezza
+            clicks = 0
+            while clicks < max_clicks:
+                clicked = False
+                for selector in load_more_selectors:
+                    try:
+                        button = await self.page.wait_for_selector(selector, timeout=2000)
+                        if button and await button.is_visible():
+                            await button.scroll_into_view_if_needed()
+                            await button.click()
+                            await self.page.wait_for_load_state('networkidle', timeout=5000)
+                            clicked = True
+                            clicks += 1
+                            self.logger.debug(f"Clicked load more button: {selector}")
+                            break
+                    except:
+                        continue
+                if not clicked:
+                    break
+
+            # Gestione modali
+            await self._handle_modals()
+
+        except Exception as e:
+            self.logger.warning(
+                "Error handling dynamic elements",
                 error=str(e)
             )
-            return False
-            
-    def _is_target_url(self, url: str, patterns: List[str]) -> bool:
-        """Check if URL matches any target patterns."""
-        return any(self._matches_pattern(url, pattern) for pattern in patterns)
-        
-    def _normalize_url(self, url: str, base_url: str) -> Optional[str]:
-        """Normalize relative URL to absolute URL."""
+
+    async def _handle_modals(self):
+        """Handle modal popups that might contain relevant links."""
         try:
-            absolute_url = urljoin(base_url, url)
-            parsed = urlparse(absolute_url)
-            return absolute_url if parsed.scheme and parsed.netloc else None
+            modal_button_selectors = [
+                'button[data-bs-toggle="modal"]',
+                '[data-toggle="modal"]',
+                '[class*="modal-trigger"]',
+                'button[onclick*="modal"]'
+            ]
+
+            for selector in modal_button_selectors:
+                buttons = await self.page.query_selector_all(selector)
+                for button in buttons:
+                    try:
+                        await button.scroll_into_view_if_needed()
+                        await button.click()
+                        
+                        # Attendi che il modal sia visibile
+                        modal = await self.page.wait_for_selector(
+                            '.modal.show, [role="dialog"][class*="show"]',
+                            timeout=3000
+                        )
+                        
+                        if modal:
+                            await self.page.wait_for_timeout(500)  # Attendi animazione
+                            
+                            # Estrai eventuali link dal modal
+                            modal_links = await modal.query_selector_all('a[href]')
+                            for link in modal_links:
+                                href = await link.get_attribute('href')
+                                if href:
+                                    self.logger.debug(f"Found link in modal: {href}")
+                            
+                            # Chiudi il modal
+                            close_button = await self.page.query_selector(
+                                '.modal.show button[data-bs-dismiss="modal"], [role="dialog"][class*="show"] button[aria-label="Close"]'
+                            )
+                            if close_button:
+                                await close_button.click()
+                                await self.page.wait_for_selector(
+                                    '.modal.show',
+                                    state='hidden',
+                                    timeout=3000
+                                )
+                    except Exception as e:
+                        self.logger.debug(f"Error handling modal: {str(e)}")
+                        continue
+
+        except Exception as e:
+            self.logger.warning(
+                "Error handling modals",
+                error=str(e)
+            )
+    
+    async def _validate_url_accessibility(self, url: str) -> bool:
+        """
+        Validate if a URL is accessible.
+        
+        Args:
+            url: URL to validate
+        
+        Returns:
+            bool: True if URL is accessible, False otherwise
+        """
+        try:
+            response = await self.page.goto(
+                url,
+                wait_until='domcontentloaded',
+                timeout=15000
+            )
+            return response and response.status == 200
         except Exception as e:
             self.logger.error(
-                "Error normalizing URL",
+                "Error validating URL accessibility",
                 url=url,
-                base_url=base_url,
                 error=str(e)
             )
-            return None
-            
+            return False
+
     async def _get_page_urls(self) -> Set[str]:
-        """Extract all URLs from current page."""
+        """
+        Extract all URLs from current page.
+        
+        Returns:
+            Set[str]: Set of normalized valid URLs from the page
+        """
         try:
-            # Get href attributes from all <a> tags
-            urls = await self.page.evaluate("""
+            # Get all anchor tags with href attributes
+            links = await self.page.evaluate("""
                 () => {
-                    const links = document.getElementsByTagName('a');
-                    return Array.from(links).map(a => a.href);
+                    const anchors = Array.from(document.querySelectorAll('a[href]'));
+                    return anchors.map(a => {
+                        return {
+                            href: a.href,
+                            text: a.textContent.trim(),
+                            rel: a.getAttribute('rel'),
+                            onclick: a.getAttribute('onclick')
+                        };
+                    });
                 }
             """)
             
@@ -90,11 +211,23 @@ class CrawlerStrategy(ABC):
             valid_urls = set()
             base_url = self.page.url
             
-            for url in urls:
-                normalized_url = self._normalize_url(url, base_url)
-                if normalized_url and self._is_valid_url(normalized_url):
-                    valid_urls.add(normalized_url)
-                    
+            for link in links:
+                # Process href attribute
+                url = self._normalize_url(link['href'], base_url)
+                if url and self._is_valid_url(url):
+                    valid_urls.add(url)
+                
+                # Check onclick handlers for URLs
+                if link['onclick']:
+                    onclick_urls = re.findall(r"window\.location(?:\.href)?\s*=\s*['\"](https?://[^'\"]+)", link['onclick'])
+                    for onclick_url in onclick_urls:
+                        if self._is_valid_url(onclick_url):
+                            valid_urls.add(onclick_url)
+            
+            # Add file URLs
+            file_urls = await self._extract_file_urls()
+            valid_urls.update(file_urls)
+            
             return valid_urls
             
         except Exception as e:
@@ -104,32 +237,228 @@ class CrawlerStrategy(ABC):
                 error=str(e)
             )
             return set()
+
+    async def _extract_file_urls(self) -> Set[str]:
+        """
+        Extract URLs that point to files (pdf, doc, etc) using various techniques.
+        
+        Returns:
+            Set[str]: Set of file URLs found
+        """
+        try:
+            file_urls = set()
             
-    async def _analyze_with_scrapegraph(self) -> tuple[Set[str], Set[str]]:
+            # Cerca link diretti a file
+            file_extensions = r'\.(pdf|doc|docx|xls|xlsx|txt|csv|zip|rar)$'
+            links = await self.page.query_selector_all('a[href*=".pdf"], a[href*=".doc"], a[href*=".xls"]')
+            
+            for link in links:
+                href = await link.get_attribute('href')
+                if href and re.search(file_extensions, href, re.IGNORECASE):
+                    normalized = self._normalize_url(href, self.page.url)
+                    if normalized:
+                        file_urls.add(normalized)
+
+            # Cerca anche in onclick e altri attributi
+            onclick_elements = await self.page.query_selector_all('[onclick*="download"], [onclick*="file"]')
+            for element in onclick_elements:
+                onclick = await element.get_attribute('onclick')
+                if onclick:
+                    matches = re.findall(r'https?://[^\s\'"]+(?:\.pdf|\.doc|\.xls)[^\s\'"]*', onclick)
+                    file_urls.update(matches)
+
+            return file_urls
+
+        except Exception as e:
+            self.logger.error(
+                "Error extracting file URLs",
+                page_url=self.page.url,
+                error=str(e)
+            )
+            return set()
+    
+    async def _analyze_with_scrapegraph(self) -> Tuple[Set[str], Set[str]]:
         """
         Analyze current page with ScrapegraphAI to identify target and seed URLs.
         
         Returns:
-            Tuple of (target_urls, seed_urls)
+            Tuple[Set[str], Set[str]]: Tuple containing sets of target URLs and seed URLs
         """
         if not self.scrapegraph_api_key:
-            self.logger.warning("ScrapegraphAI API key not provided")
+            self.logger.warning(
+                "ScrapegraphAI analysis skipped - no API key provided",
+                page_url=self.page.url
+            )
             return set(), set()
             
         try:
-            # Implementation of ScrapegraphAI analysis would go here
-            # This is a placeholder that would need to be implemented
-            # based on the actual ScrapegraphAI API
-            pass
+            content = await self.page.content()
+            metadata = await self._get_page_metadata()
+            
+            # TODO: Implement actual ScrapegraphAI API call here
+            # This is a placeholder - real implementation would make API request
+            
+            return set(), set()
             
         except Exception as e:
             self.logger.error(
-                "Error analyzing page with ScrapegraphAI",
+                "Error in ScrapegraphAI analysis",
                 page_url=self.page.url,
                 error=str(e)
             )
             return set(), set()
+    
+    async def _get_page_metadata(self) -> dict:
+        """
+        Extract useful metadata from the current page.
+        
+        Returns:
+            dict: Dictionary containing page metadata
+        """
+        try:
+            metadata = await self.page.evaluate("""
+                () => ({
+                    title: document.title,
+                    description: document.querySelector('meta[name="description"]')?.content,
+                    keywords: document.querySelector('meta[name="keywords"]')?.content,
+                    canonical: document.querySelector('link[rel="canonical"]')?.href,
+                    h1: Array.from(document.getElementsByTagName('h1')).map(h => h.textContent.trim()),
+                    lastModified: document.lastModified
+                })
+            """)
+            return metadata
+        except Exception as e:
+            self.logger.error(
+                "Error extracting page metadata",
+                page_url=self.page.url,
+                error=str(e)
+            )
+            return {}
+
+    async def _wait_for_page_ready(self):
+        """Wait for page to be completely loaded and stable."""
+        try:
+            # Attendi caricamento base
+            await self.page.wait_for_load_state('domcontentloaded')
             
+            # Attendi network idle
+            await self.page.wait_for_load_state('networkidle')
+            
+            # Attendi caricamento immagini e altri contenuti
+            await self.page.wait_for_load_state('load')
+            
+            # Scrolling per caricare contenuto lazy
+            await self.page.evaluate("""
+                window.scrollTo(0, document.body.scrollHeight);
+                window.scrollTo(0, 0);
+            """)
+            
+            # Breve pausa per eventuali reazioni JS
+            await self.page.wait_for_timeout(1000)
+
+        except Exception as e:
+            self.logger.warning(
+                "Error waiting for page ready",
+                error=str(e)
+            )
+    
+    def _is_valid_url(self, url: str) -> bool:
+        """
+        Validate URL format and scheme.
+        
+        Args:
+            url: URL to validate
+            
+        Returns:
+            bool: True if URL is valid, False otherwise
+        """
+        try:
+            result = urlparse(url)
+            return all([
+                result.scheme, 
+                result.netloc,
+                result.scheme in ['http', 'https'],
+                not result.netloc.startswith('.')  # Avoid relative domains
+            ])
+        except Exception:
+            return False
+            
+    def _matches_pattern(self, url: str, pattern: str) -> bool:
+        """
+        Check if URL matches a regex pattern.
+        
+        Args:
+            url: URL to check
+            pattern: Regex pattern to match against
+            
+        Returns:
+            bool: True if URL matches pattern, False otherwise
+        """
+        try:
+            return bool(re.search(pattern, url, re.IGNORECASE))
+        except re.error as e:
+            self.logger.error(
+                "Invalid regex pattern",
+                pattern=pattern,
+                error=str(e)
+            )
+            return False
+            
+    def _is_target_url(self, url: str, patterns: List[str]) -> bool:
+        """
+        Check if URL matches any target patterns.
+        
+        Args:
+            url: URL to check
+            patterns: List of regex patterns to match against
+            
+        Returns:
+            bool: True if URL matches any pattern, False otherwise
+        """
+        return any(self._matches_pattern(url, pattern) for pattern in patterns)
+        
+    def _normalize_url(self, url: str, base_url: str) -> Optional[str]:
+        """
+        Normalize relative URL to absolute URL.
+        
+        Args:
+            url: URL to normalize
+            base_url: Base URL for resolving relative URLs
+            
+        Returns:
+            Optional[str]: Normalized URL if valid, None otherwise
+        """
+        try:
+            # Clean the URL first
+            url = url.strip()
+            
+            # Skip invalid or empty URLs
+            if not url or url.startswith(('javascript:', 'mailto:', 'tel:')):
+                return None
+                
+            absolute_url = urljoin(base_url, url)
+            parsed = urlparse(absolute_url)
+            
+            # Additional validation
+            if not all([parsed.scheme, parsed.netloc]):
+                return None
+                
+            # Normalize the URL
+            normalized = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+            if parsed.query:
+                normalized += f"?{parsed.query}"
+                
+            return normalized
+            
+        except Exception as e:
+            self.logger.error(
+                "Error normalizing URL",
+                url=url,
+                base_url=base_url,
+                error=str(e)
+            )
+            return None
+       
     def create_frontier_url(
         self,
         url: str,
@@ -145,16 +474,26 @@ class CrawlerStrategy(ABC):
             is_target: Whether URL is a target document
             
         Returns:
-            New FrontierUrl instance
+            FrontierUrl: New FrontierUrl instance
         """
-        return FrontierUrl(
-            url=url,
-            category=parent.category,
-            url_type=parent.url_type,
-            depth=parent.depth + 1,
-            max_depth=parent.max_depth,
-            target_patterns=parent.target_patterns,
-            seed_pattern=parent.seed_pattern,
-            is_target=is_target,
-            parent_url=str(parent.url)
-        )
+        try:
+            return FrontierUrl(
+                url=url,
+                category=parent.category,
+                url_type=parent.url_type,
+                depth=parent.depth + 1,
+                max_depth=parent.max_depth,
+                target_patterns=parent.target_patterns,
+                seed_pattern=parent.seed_pattern,
+                is_target=is_target,
+                parent_url=str(parent.url),
+                main_domain=urlparse(url).netloc
+            )
+        except Exception as e:
+            self.logger.error(
+                "Error creating frontier URL",
+                url=url,
+                parent_url=str(parent.url),
+                error=str(e)
+            )
+            raise

@@ -1,6 +1,7 @@
 project_documentation.md
 config/crawler_config.yaml
 llm_analysis.md
+*.ipynb
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

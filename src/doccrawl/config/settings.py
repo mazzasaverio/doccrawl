@@ -33,6 +33,8 @@ class DatabaseSettings(BaseModel):
             d['password'] = self.password.get_secret_value()
         return d
 
+# src/doccrawl/config/settings.py
+
 class CrawlerSettings(BaseModel):
     """Crawler specific settings."""
     request_delay: float = Field(
@@ -50,6 +52,10 @@ class CrawlerSettings(BaseModel):
     batch_size: int = Field(
         default=int(os.getenv("BATCH_SIZE", "10")),
         description="Batch size for processing URLs"
+    )
+    headless: bool = Field(
+        default=bool(os.getenv("PLAYWRIGHT_HEADLESS", "true").lower() == "true"),
+        description="Run browser in headless mode"
     )
 
 class UrlConfig(BaseModel):
