@@ -81,7 +81,7 @@ class CrawlerApp:
         """
         try:
             # Per gli URL seed child, verifica se sono già stati processati
-            if not is_root_url and  self.frontier_crud.exists_in_frontier(str(frontier_url.url)):
+            if not is_root_url and self.frontier_crud.exists_in_frontier(str(frontier_url.url)):
                 existing_url =  self.frontier_crud.get_url_by_url(str(frontier_url.url))
                 if existing_url and existing_url.status == UrlStatus.PROCESSED:
                     self.logger.info(
@@ -185,6 +185,11 @@ class CrawlerApp:
                 config_log_id,
                 is_root_url
             )
+            logfire.info(
+                "URL processed",
+               
+                new_urls=len(new_urls)
+            )
             
             # Per ogni URL seed trovato, processa ricorsivamente
             for url in new_urls:
@@ -202,7 +207,7 @@ class CrawlerApp:
     async def process_config_url(self, config_url: FrontierUrl) -> None:
         """Process a single config URL (root URL) and all its descendants."""
         try:
-            # Crea log entry per questo URL di configurazione
+          
             config_log = ConfigUrlLog(
                 url=str(config_url.url),
                 category=config_url.category,
@@ -215,24 +220,18 @@ class CrawlerApp:
             
             log_id = self.config_log_crud.create_log(config_log)
             
-     
-            
-            # Inizia il processing
+
             self.config_log_crud.start_processing(log_id)
             
-            # Processa l'URL root e tutti i suoi seed child
-            # is_root_url=True indica che questo URL deve essere sempre processato
             await self.process_seed_recursively(config_url, log_id, is_root_url=True)
-            
-            # Marca come completato
+
             self.config_log_crud.update_status(
                 log_id,
                 ConfigUrlStatus.COMPLETED
             )
             
             self.logger.info(
-                "Config URL processing completed",
-                url=str(config_url.url)
+                "Config URL processing completed"
             )
             
         except Exception as e:

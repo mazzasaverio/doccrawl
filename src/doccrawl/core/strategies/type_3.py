@@ -53,7 +53,7 @@ class Type3Strategy(CrawlerStrategy):
         try:
             self.logger.info(
                 "Processing depth 0",
-                url=str(frontier_url.url)
+               
             )
 
             if not frontier_url.target_patterns or not frontier_url.seed_pattern:
@@ -69,6 +69,10 @@ class Type3Strategy(CrawlerStrategy):
             
             all_urls = await self._get_page_urls()
             file_urls = await self._extract_file_urls()
+            logfire.info(
+                "File URLs extracted",
+                file_urls=file_urls
+            )
             all_urls.update(file_urls)
             
             new_urls = []
