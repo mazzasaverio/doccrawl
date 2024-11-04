@@ -145,12 +145,7 @@ class Crawler:
                    scrapegraph_api_key=self.scrapegraph_api_key
                )
                
-               # Mark URL as processing
-               if frontier_url.id:
-                   await frontier_crud.update_url_status(
-                       frontier_url.id,
-                       UrlStatus.PROCESSING
-                   )
+             
                
                # Execute strategy
                new_urls = await strategy.execute(frontier_url)
@@ -158,11 +153,11 @@ class Crawler:
                # Save new URLs to frontier
                if new_urls:
                    batch = FrontierBatch(urls=new_urls)
-                   await frontier_crud.create_urls_batch(batch)
+                   frontier_crud.create_urls_batch(batch)
                
                # Mark URL as processed
                if frontier_url.id:
-                   await frontier_crud.update_url_status(
+                   frontier_crud.update_url_status(
                        frontier_url.id,
                        UrlStatus.PROCESSED
                    )
@@ -180,7 +175,7 @@ class Crawler:
                    error=str(e)
                )
                if frontier_url.id:
-                   await frontier_crud.update_url_status(
+                   frontier_crud.update_url_status(
                        frontier_url.id,
                        UrlStatus.FAILED,
                        error_message=str(e)
@@ -195,65 +190,59 @@ class Crawler:
                url=str(frontier_url.url),
                error=str(e)
            )
-   
    async def process_single_url(self, frontier_url: FrontierUrl) -> List[FrontierUrl]:
-       """
-       Process a single URL and return discovered URLs.
-       
-       Args:
-           frontier_url: FrontierUrl instance to process
-           
-       Returns:
-           List of newly discovered FrontierUrls
-       """
-       try:
-           strategy_class = self.strategies.get(frontier_url.url_type)
-           if not strategy_class:
-               self.logger.error(
-                   "Unknown URL type",
-                   url=str(frontier_url.url),
-                   type=frontier_url.url_type
-               )
-               return []
-           
+    """
+    Process a single URL and return discovered URLs.
+    
+    Args:
+        frontier_url: FrontierUrl instance to process
         
+    Returns:
+        List of newly discovered FrontierUrls
+    """
+    try:
+        strategy_class = self.strategies.get(frontier_url.url_type)
+        if not strategy_class:
+            self.logger.error(
+                "Unknown URL type",
+                url=str(frontier_url.url),
+                type=frontier_url.url_type
+            )
+            return []
 
-           async with self._get_browser_context() as context:
-               page = await context.new_page()
-               
-               try:
-                   strategy = strategy_class(
-                       frontier_crud=None,
-                       playwright_page=page,
-                       scrapegraph_api_key=self.scrapegraph_api_key
-                   )
+        async with self._get_browser_context() as context:
+            page = await context.new_page()
+            
+            try:
+                strategy = strategy_class(
+                    frontier_crud=None,
+                    playwright_page=page,
+                    scrapegraph_api_key=self.scrapegraph_api_key
+                )
 
-                   new_urls = await strategy.execute(frontier_url)
-                   self.logger.info(
-                       "URL processed successfully",
-                       url=str(frontier_url.url),
-                       new_urls_count=len(new_urls) if new_urls else 0
-                   )
-                   
-                   return new_urls if new_urls else []
+                new_urls = await strategy.execute(frontier_url)
+                
+       
+                
+                return new_urls if new_urls else []
 
-               except Exception as e:
-                   self.logger.error(
-                       "Error processing URL",
-                       url=str(frontier_url.url),
-                       error=str(e)
-                   )
-                   return []
-               finally:
-                   await page.close()
+            except Exception as e:
+                self.logger.error(
+                    "Error processing URL",
+                    url=str(frontier_url.url),
+                    error=str(e)
+                )
+                return []
+            finally:
+                await page.close()
 
-       except Exception as e:
-           self.logger.error(
-               "Critical error in process_single_url",
-               url=str(frontier_url.url),
-               error=str(e)
-           )
-           return []
+    except Exception as e:
+        self.logger.error(
+            "Critical error in process_single_url",
+            url=str(frontier_url.url),
+            error=str(e)
+        )
+        return []
        
    async def run(self, db_connection: DatabaseConnection) -> None:
        """
@@ -268,7 +257,7 @@ class Crawler:
            while True:
                try:
                    # Get batch of pending URLs
-                   pending_urls = await frontier_crud.get_pending_urls(
+                   pending_urls = frontier_crud.get_pending_urls(
                        limit=self.batch_size
                    )
                    

@@ -5,7 +5,7 @@ import logfire
 def setup_logging():
     """Configure logging with logfire."""
     # Configurazione base
-    logfire.configure(console=logfire.ConsoleOptions(min_log_level='info', verbose=True))
+    logfire.configure(console=logfire.ConsoleOptions(min_log_level='info', verbose=True,  show_project_link =False, ))
 
     handler = logfire.LogfireLoggingHandler()
     logging.basicConfig(handlers=[handler], level=logging.INFO)

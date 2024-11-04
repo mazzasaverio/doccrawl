@@ -5,20 +5,19 @@ from urllib.parse import urlparse
 
 from .base_crud import BaseCRUD
 from ..models.config_url_log_model import ConfigUrlLog, ConfigUrlStatus
+# src/doccrawl/crud/config_url_log_crud.py
 
 class ConfigUrlLogCRUD(BaseCRUD):
-    """CRUD operations for config URL logging."""
-    
     def __init__(self, conn):
         super().__init__(conn)
         self.table = "config_url_logs"
 
-    async def create_log(self, log: ConfigUrlLog) -> int:
+    def create_log(self, log: ConfigUrlLog) -> int:
         """Create a new log entry."""
         data = log.model_dump(exclude={'id'})
-        return await self.insert_one(self.table, data)
+        return self.insert_one(self.table, data)
 
-    async def update_status(
+    def update_status(
         self, 
         log_id: int, 
         status: ConfigUrlStatus,
@@ -27,7 +26,7 @@ class ConfigUrlLogCRUD(BaseCRUD):
     ) -> Optional[ConfigUrlLog]:
         """Update log status and related metrics."""
         data = {
-            'status': status,
+            'status': status.value,  # Convert enum to string
             'updated_at': datetime.now(),
             'error_message': error_message,
             **metrics
@@ -41,7 +40,7 @@ class ConfigUrlLogCRUD(BaseCRUD):
                     data['end_time'] - data['start_time']
                 ).total_seconds()
         
-        updated = await self.update(
+        updated = self.update(
             self.table,
             conditions={'id': log_id},
             data=data,
@@ -50,15 +49,15 @@ class ConfigUrlLogCRUD(BaseCRUD):
         
         return ConfigUrlLog.model_validate(updated[0]) if updated else None
 
-    async def start_processing(self, log_id: int) -> Optional[ConfigUrlLog]:
+    def start_processing(self, log_id: int) -> Optional[ConfigUrlLog]:
         """Mark a config URL as starting processing."""
         data = {
-            'status': ConfigUrlStatus.RUNNING,
+            'status': ConfigUrlStatus.RUNNING.value,  # Convert enum to string
             'start_time': datetime.now(),
             'updated_at': datetime.now()
         }
         
-        updated = await self.update(
+        updated = self.update(
             self.table,
             conditions={'id': log_id},
             data=data,
@@ -67,7 +66,7 @@ class ConfigUrlLogCRUD(BaseCRUD):
         
         return ConfigUrlLog.model_validate(updated[0]) if updated else None
 
-    async def increment_counters(
+    def increment_counters(
         self,
         log_id: int,
         target_urls: int = 0,
@@ -84,28 +83,28 @@ class ConfigUrlLogCRUD(BaseCRUD):
             'updated_at': datetime.now()
         }
         
-        await self.update(
+        self.update(
             self.table,
             conditions={'id': log_id},
             data=data
         )
 
-    async def add_warning(self, log_id: int, warning: str) -> None:
+    def add_warning(self, log_id: int, warning: str) -> None:
         """Add a warning message to the log."""
         data = {
             'warning_messages': [warning],  # PostgreSQL will append this to existing array
             'updated_at': datetime.now()
         }
         
-        await self.update(
+        self.update(
             self.table,
             conditions={'id': log_id},
             data=data
         )
 
-    async def get_category_summary(self, category: str) -> List[Dict[str, Any]]:
+    def get_category_summary(self, category: str) -> List[Dict[str, Any]]:
         """Get processing summary for all URLs in a category."""
-        return await self.select(
+        return self.select(
             self.table,
             conditions={'category': category},
             columns=[
@@ -121,9 +120,9 @@ class ConfigUrlLogCRUD(BaseCRUD):
             order_by='status'
         )
 
-    async def get_processing_stats(self) -> Dict[str, Any]:
+    def get_processing_stats(self) -> Dict[str, Any]:
         """Get overall processing statistics."""
-        results = await self.select(
+        results = self.select(
             self.table,
             columns=[
                 'COUNT(*) as total_configs',

@@ -61,6 +61,25 @@ crawler:
     max_concurrent_pages: 5
     batch_size: 10
 
+  graph_config:
+    model: "openai/gpt-4o-mini"
+    verbose: false
+    headless: false
+
+    prompts:
+      general: |
+        Find all URLs that are the main bando of scholarships, research grants, graduation awards, or similar, or URLs that might contain them. 
+        Label PDF links (so with pdf exention) of scholarships, research grants, graduation awards, or similar academic opportunities as "target" (so you have to determine from the 
+        extension of the URL if it is a PDF link, only in that case yoy can label as "target". So be careful to label as a "target" if and only if the link is a pdf, otherwise put "seed". Consider only the main PDF document or the main PDF bando if present). Label URLs that may contain such PDFs but are not PDF links, as "seed". Search only in links that could potentially have documents related to 2024, 2025, or 2026.
+      specific:
+        url: "The full URL string."
+        url_description: "A brief description of the URL."
+        extension: "The extension of the URL."
+        pagination: "true if it's a pagination link, false otherwise."
+        category_url: |
+          Label PDF links (so with pdf exention) of scholarships, research grants, graduation awards, or similar academic opportunities as "target" (so you have to determine from the 
+          extension of the URL if it is a PDF link, only in that case yoy can label as "target". So be careful to label as a "target" if and only if the link is a pdf, otherwise put "seed". Consider only the main PDF document or the main PDF bando if present). Label URLs that may contain such PDFs but are not PDF links, as "seed". Search only in links that could potentially have documents related to 2024, 2025, or 2026.
+
   categories:
     - name: "Roma La Sapienza"
       description: "Borse di studio e premi di laurea Sapienza"

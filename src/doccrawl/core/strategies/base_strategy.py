@@ -10,6 +10,20 @@ from doccrawl.utils.crawler_utils import CrawlerUtils
 
 from ...models.frontier_model import FrontierUrl, UrlType
 from ...crud.frontier_crud import FrontierCRUD
+from typing import List, Set, Tuple
+from scrapegraphai.graphs import SmartScraperMultiGraph
+from pydantic import BaseModel
+import os
+
+class Url(BaseModel):
+    url: str
+    url_description: str
+    extension: str
+    pagination: str
+    url_category: str
+
+class Urls(BaseModel):
+    urls: List[Url]
 
 class CrawlerStrategy(ABC):
     """Base class for crawler strategies."""
@@ -276,35 +290,98 @@ class CrawlerStrategy(ABC):
                 error=str(e)
             )
             return set()
-    
     async def _analyze_with_scrapegraph(self) -> Tuple[Set[str], Set[str]]:
         """
         Analyze current page with ScrapegraphAI to identify target and seed URLs.
+        Uses configuration from crawler_config.yaml for graph settings and prompts.
         
         Returns:
-            Tuple[Set[str], Set[str]]: Tuple containing sets of target URLs and seed URLs
+            Tuple[Set[str], Set[str]]: Sets of (target_urls, seed_urls)
         """
-        if not self.scrapegraph_api_key:
-            self.logger.warning(
-                "ScrapegraphAI analysis skipped - no API key provided",
-                page_url=self.page.url
-            )
-            return set(), set()
-            
         try:
+            if not self.scrapegraph_api_key:
+                self.logger.error("ScrapegraphAI API key not provided")
+                return set(), set()
+
+            # Get current page content and URL
             content = await self.page.content()
-            metadata = await self._get_page_metadata()
-            
-            # TODO: Implement actual ScrapegraphAI API call here
-            # This is a placeholder - real implementation would make API request
-            
-            return set(), set()
-            
+            current_url = self.page.url
+
+            # Extract metadata for better context
+            metadata = await self.page.evaluate("""
+                () => ({
+                    title: document.title,
+                    metaDescription: document.querySelector('meta[name="description"]')?.content,
+                    h1: Array.from(document.getElementsByTagName('h1')).map(h => h.textContent),
+                })
+            """)
+
+            # Prepare graph config
+            graph_config = {
+                "llm": {
+                    "api_key": self.scrapegraph_api_key,
+                    "model": "gpt-4o-mini",  # From config['graph_config']['model']
+                    "temperature": 0,
+                },
+                "verbose": False,  # From config['graph_config']['verbose']
+                "headless": True,  # From config['graph_config']['headless']
+            }
+
+            # Use general prompt from config
+            prompt = """
+            Find all URLs that are the main bando of scholarships, research grants, 
+            graduation awards, or similar, or URLs that might contain them. 
+            Label PDF links (with pdf extension) of scholarships, research grants, 
+            graduation awards, or similar academic opportunities as "target". 
+            Label URLs that may contain such PDFs but are not PDF links as "seed". 
+            Search only in links that could potentially have documents related to 2024, 
+            2025, or 2026.
+            """
+
+            # Initialize ScrapegraphAI with schema
+            search_graph = SmartScraperMultiGraph(
+                prompt=prompt,
+                config=graph_config,
+                source=[current_url],
+                schema=Urls
+            )
+
+            # Run analysis
+            result = search_graph.run()
+
+            # Process results
+            target_urls = set()
+            seed_urls = set()
+
+            if result and 'urls' in result:
+                for url_data in result['urls']:
+                    if not url_data.get('pagination', 'false').lower() == 'true':
+                        url = url_data.get('url')
+                        if url:
+                            # Normalize URL
+                            normalized_url = self._normalize_url(url, current_url)
+                            if normalized_url:
+                                # Check if it's a target (PDF) or seed URL
+                                if url_data.get('url_category') == 'target' or \
+                                (normalized_url.lower().endswith('.pdf') and 
+                                    self._is_target_url(normalized_url, [])):  # Empty patterns list as we rely on AI
+                                    target_urls.add(normalized_url)
+                                elif url_data.get('url_category') == 'seed':
+                                    seed_urls.add(normalized_url)
+
+            self.logger.info(
+                "ScrapegraphAI analysis completed",
+                targets_found=len(target_urls),
+                seeds_found=len(seed_urls)
+            )
+
+            return target_urls, seed_urls
+
         except Exception as e:
             self.logger.error(
                 "Error in ScrapegraphAI analysis",
-                page_url=self.page.url,
-                error=str(e)
+                error=str(e),
+                url=self.page.url
             )
             return set(), set()
     

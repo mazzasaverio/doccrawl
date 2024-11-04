@@ -21,7 +21,6 @@ def main():
     try:
         from doccrawl.main import CrawlerApp
         
-        # Ottieni o crea event loop
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
