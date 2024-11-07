@@ -1,6 +1,5 @@
 from typing import List, Set, Tuple
 import logfire
-from playwright.async_api import TimeoutError as PlaywrightTimeout
 import nest_asyncio
 from scrapegraphai.graphs import SmartScraperMultiGraph
 from pydantic import BaseModel
@@ -32,30 +31,84 @@ class Type3Strategy(CrawlerStrategy):
     - Depth 2: Only collects target URLs matching patterns
     
     Features:
-    - Pattern-based URL discovery at depth 0
-    - AI-assisted URL discovery at depth 1
+    - Pattern-based crawling at depth 0
+    - AI-assisted crawling at depth 1
     - Target-only collection at depth 2
+    - Max depth must be 2
     - Skip already processed seeds
-    - Comprehensive error handling
     """
     
-    async def _should_skip_url(self, url: str) -> bool:
-        """Check if URL should be skipped."""
-        if self.frontier_crud is None:
-            return False
-        return await self.frontier_crud.exists_in_frontier(url)
-    
-    async def _process_depth_0(
-        self, 
-        frontier_url: FrontierUrl
-    ) -> List[FrontierUrl]:
-        """Process initial page using regex patterns."""
+    async def _analyze_with_scrapegraph(self, url: str) -> Tuple[Set[str], Set[str]]:
+        """
+        Analyze page using ScrapegraphAI.
+        Returns sets of target and seed URLs.
+        """
         try:
-            self.logger.info(
-                "Processing depth 0",
-               
+            if not self.scrapegraph_api_key:
+                self.logger.error("ScrapegraphAI API key not provided")
+                return set(), set()
+
+            # Get configuration from settings
+            graph_config = {
+                "llm": {
+                    "api_key": self.scrapegraph_api_key,
+                    "model": settings.crawler_config.default_settings.get(
+                        "graph_config", {}).get("model", "openai/gpt-4o-mini"),
+                    "temperature": 0,
+                },
+                "verbose": False,
+                "headless": True,
+            }
+
+            prompt = settings.crawler_config.default_settings.get(
+                "graph_config", {}).get("prompts", {}).get("general")
+
+            # Initialize and run ScrapegraphAI
+            search_graph = SmartScraperMultiGraph(
+                prompt=prompt,
+                config=graph_config,
+                source=[url],
+                schema=Urls
             )
 
+            result = search_graph.run()
+            
+            # Process and validate results
+            target_urls = set()
+            seed_urls = set()
+            
+            if result and 'urls' in result:
+                for url_data in result['urls']:
+                    if url_data.get('pagination', 'false').lower() == 'true':
+                        continue
+                        
+                    url = url_data.get('url')
+                    if not url or not self._is_valid_url(url):
+                        continue
+                        
+                    normalized_url = self._normalize_url(url, self.page.url)
+                    if not normalized_url:
+                        continue
+                        
+                    if url_data.get('url_category') == 'target' and \
+                       normalized_url.lower().endswith('.pdf'):
+                        target_urls.add(normalized_url)
+                    elif url_data.get('url_category') == 'seed':
+                        seed_urls.add(normalized_url)
+
+            return target_urls, seed_urls
+
+        except Exception as e:
+            self.logger.error(
+                "Error in ScrapegraphAI analysis",
+                url=url,
+                error=str(e)
+            )
+            return set(), set()
+
+    async def _process_depth_0(self, frontier_url: FrontierUrl) -> List[FrontierUrl]:
+        """Process initial page using regex patterns."""
+        try:
             if not frontier_url.target_patterns or not frontier_url.seed_pattern:
                 self.logger.error("Missing required patterns for depth 0")
                 return []
@@ -69,34 +122,21 @@ class Type3Strategy(CrawlerStrategy):
             
             all_urls = await self._get_page_urls()
             file_urls = await self._extract_file_urls()
-            logfire.info(
-                "File URLs extracted",
-                file_urls=file_urls
-            )
             all_urls.update(file_urls)
             
-            new_urls = []
-
-            for url in all_urls:
-                if url == str(frontier_url.url):
-                    continue
-
-                if self._is_target_url(url, frontier_url.target_patterns):
-                    if not await self._should_skip_url(url):
-                        new_urls.append(self.create_frontier_url(
-                            url=url,
-                            parent=frontier_url,
-                            is_target=True
-                        ))
-                elif self._matches_pattern(url, frontier_url.seed_pattern):
-                    if not await self._should_skip_url(url):
-                        new_urls.append(self.create_frontier_url(
-                            url=url,
-                            parent=frontier_url,
-                            is_target=False
-                        ))
-
-            return new_urls
+            target_urls = {
+                url for url in all_urls 
+                if url != str(frontier_url.url) and
+                self._is_target_url(url, frontier_url.target_patterns)
+            }
+            
+            seed_urls = {
+                url for url in all_urls
+                if url != str(frontier_url.url) and
+                self._matches_pattern(url, frontier_url.seed_pattern)
+            }
+            
+            return await self._store_urls(target_urls, seed_urls, frontier_url)
 
         except Exception as e:
             self.logger.error(
@@ -106,66 +146,9 @@ class Type3Strategy(CrawlerStrategy):
             )
             return []
 
-    async def _analyze_with_scrapegraph(self, url: str) -> Tuple[Set[str], Set[str]]:
-        """Analyze page using ScrapegraphAI."""
+    async def _process_depth_1(self, frontier_url: FrontierUrl) -> List[FrontierUrl]:
+        """Process page using ScrapegraphAI."""
         try:
-            if not self.scrapegraph_api_key:
-                self.logger.error("ScrapegraphAI API key not provided")
-                return set(), set()
-
-            graph_config = {
-                "llm": {
-                    "api_key": self.scrapegraph_api_key,
-                    "model": settings.crawler_config.default_settings.get("graph_config", {}).get("model", "openai/gpt-4o-mini"),
-                    "temperature": 0,
-                },
-                "verbose": settings.crawler_config.default_settings.get("graph_config", {}).get("verbose", False),
-                "headless": settings.crawler_config.default_settings.get("graph_config", {}).get("headless", True),
-            }
-
-            prompt = settings.crawler_config.default_settings.get("graph_config", {}).get("prompts", {}).get("general")
-
-            search_graph = SmartScraperMultiGraph(
-                prompt=prompt,
-                config=graph_config,
-                source=[url],
-                schema=Urls
-            )
-
-            result = search_graph.run()
-
-            seed_urls = {
-                url_data['url'] 
-                for url_data in result['urls']
-                if url_data['url_category'] == 'seed' and url_data['pagination'] != 'true'
-            }
-
-            target_urls = {
-                url_data['url']
-                for url_data in result['urls']
-                if url_data['url_category'] == 'target'
-            }
-
-            return target_urls, seed_urls
-
-        except Exception as e:
-            self.logger.error(
-                "Error in ScrapegraphAI analysis",
-                error=str(e)
-            )
-            return set(), set()
-
-    async def _process_depth_1(
-        self,
-        frontier_url: FrontierUrl
-    ) -> List[FrontierUrl]:
-        """Process page using ScrapegraphAI at depth 1."""
-        try:
-            self.logger.info(
-                "Processing depth 1 with AI",
-                url=str(frontier_url.url)
-            )
-
             response = await self.page.goto(str(frontier_url.url))
             if not response or response.status != 200:
                 return []
@@ -173,35 +156,11 @@ class Type3Strategy(CrawlerStrategy):
             await self._wait_for_page_ready()
             await self._handle_dynamic_elements()
             
-            target_urls, seed_urls = await self._analyze_with_scrapegraph(str(frontier_url.url))
-            
-            new_urls = []
-
-            for url in target_urls:
-                if not await self._should_skip_url(url):
-                    new_urls.append(self.create_frontier_url(
-                        url=url,
-                        parent=frontier_url,
-                        is_target=True
-                    ))
-
-            if frontier_url.depth < frontier_url.max_depth - 1:
-                for url in seed_urls:
-                    if not await self._should_skip_url(url):
-                        new_urls.append(self.create_frontier_url(
-                            url=url,
-                            parent=frontier_url,
-                            is_target=False
-                        ))
-
-            self.logger.info(
-                "Depth 1 processing completed",
-                url=str(frontier_url.url),
-                targets_found=len([u for u in new_urls if u.is_target]),
-                seeds_found=len([u for u in new_urls if not u.is_target])
+            target_urls, seed_urls = await self._analyze_with_scrapegraph(
+                str(frontier_url.url)
             )
-
-            return new_urls
+            
+            return await self._store_urls(target_urls, seed_urls, frontier_url)
 
         except Exception as e:
             self.logger.error(
@@ -211,17 +170,9 @@ class Type3Strategy(CrawlerStrategy):
             )
             return []
 
-    async def _process_depth_2(
-        self, 
-        frontier_url: FrontierUrl
-    ) -> List[FrontierUrl]:
+    async def _process_depth_2(self, frontier_url: FrontierUrl) -> List[FrontierUrl]:
         """Process final depth, collecting only target URLs."""
         try:
-            self.logger.info(
-                "Processing depth 2",
-                url=str(frontier_url.url)
-            )
-
             response = await self.page.goto(str(frontier_url.url))
             if not response or response.status != 200:
                 return []
@@ -233,19 +184,14 @@ class Type3Strategy(CrawlerStrategy):
             file_urls = await self._extract_file_urls()
             all_urls.update(file_urls)
             
-            new_urls = []
-
-            for url in all_urls:
-                if frontier_url.target_patterns and \
-                   self._is_target_url(url, frontier_url.target_patterns):
-                    if not await self._should_skip_url(url):
-                        new_urls.append(self.create_frontier_url(
-                            url=url,
-                            parent=frontier_url,
-                            is_target=True
-                        ))
-
-            return new_urls
+            target_urls = {
+                url for url in all_urls
+                if url != str(frontier_url.url) and
+                frontier_url.target_patterns and
+                self._is_target_url(url, frontier_url.target_patterns)
+            }
+            
+            return await self._store_urls(target_urls, set(), frontier_url)
 
         except Exception as e:
             self.logger.error(
@@ -258,12 +204,7 @@ class Type3Strategy(CrawlerStrategy):
     async def execute(self, frontier_url: FrontierUrl) -> List[FrontierUrl]:
         """Execute Type 3 strategy based on current depth."""
         try:
-            self.logger.info(
-                "Executing Type 3 strategy",
-                url=str(frontier_url.url),
-                depth=frontier_url.depth
-            )
-
+            # Validate configuration
             if not frontier_url.target_patterns:
                 self.logger.error("No target patterns specified")
                 return []
@@ -275,6 +216,8 @@ class Type3Strategy(CrawlerStrategy):
                 )
                 return []
 
+            # Process based on current depth
+            new_urls = []
             if frontier_url.depth == 0:
                 new_urls = await self._process_depth_0(frontier_url)
             elif frontier_url.depth == 1:
@@ -285,12 +228,8 @@ class Type3Strategy(CrawlerStrategy):
                 self.logger.error("Invalid depth for Type 3 URL")
                 return []
 
-            # Update status only if frontier_crud exists
-            if self.frontier_crud is not None and frontier_url.id is not None:
-                await self.frontier_crud.update_url_status(
-                    frontier_url.id,
-                    UrlStatus.PROCESSED
-                )
+            # Update current URL status
+            await self._update_url_status(frontier_url, UrlStatus.PROCESSED)
 
             return new_urls
 
@@ -300,11 +239,9 @@ class Type3Strategy(CrawlerStrategy):
                 url=str(frontier_url.url),
                 error=str(e)
             )
-            # Update failed status only if frontier_crud exists
-            if self.frontier_crud is not None and frontier_url.id is not None:
-                await self.frontier_crud.update_url_status(
-                    frontier_url.id,
-                    UrlStatus.FAILED,
-                    error_message=str(e)
-                )
+            await self._update_url_status(
+                frontier_url,
+                UrlStatus.FAILED,
+                error_message=str(e)
+            )
             return []

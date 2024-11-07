@@ -164,7 +164,7 @@ class Crawler:
                
                self.logger.info(
                    "URL processed successfully",
-                   url=str(frontier_url.url),
+                 
                    new_urls_found=len(new_urls)
                )
                

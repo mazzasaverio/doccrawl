@@ -1,4 +1,3 @@
-#src/core/strategies/base_strategy.py
 from abc import ABC, abstractmethod
 from typing import List, Optional, Set, Tuple
 import re
@@ -6,27 +5,15 @@ from urllib.parse import urljoin, urlparse
 import logfire
 from playwright.async_api import Page
 
-from doccrawl.utils.crawler_utils import CrawlerUtils
-
-from ...models.frontier_model import FrontierUrl, UrlType
+from ...models.frontier_model import FrontierUrl, UrlType, UrlStatus
 from ...crud.frontier_crud import FrontierCRUD
-from typing import List, Set, Tuple
-from scrapegraphai.graphs import SmartScraperMultiGraph
-from pydantic import BaseModel
-import os
-
-class Url(BaseModel):
-    url: str
-    url_description: str
-    extension: str
-    pagination: str
-    url_category: str
-
-class Urls(BaseModel):
-    urls: List[Url]
+from ...utils.crawler_utils import CrawlerUtils
 
 class CrawlerStrategy(ABC):
-    """Base class for crawler strategies."""
+    """
+    Base class for crawler strategies.
+    Provides common functionality for all crawling strategies.
+    """
     
     def __init__(
         self,
@@ -34,32 +21,44 @@ class CrawlerStrategy(ABC):
         playwright_page: Page,
         scrapegraph_api_key: Optional[str] = None
     ):
+        """Initialize strategy with necessary components."""
         self.frontier_crud = frontier_crud
         self.page = playwright_page
         self.scrapegraph_api_key = scrapegraph_api_key
         self.logger = logfire
         self.utils = CrawlerUtils()
-    
-    @abstractmethod
-    async def execute(self, frontier_url: FrontierUrl) -> List[FrontierUrl]:
-        """
-        Execute the crawling strategy for a given URL.
-        
-        Args:
-            frontier_url: FrontierUrl instance to process
+
+    async def _wait_for_page_ready(self):
+        """Wait for page to be completely loaded and stable."""
+        try:
+            # Wait for basic load
+            await self.page.wait_for_load_state('domcontentloaded')
             
-        Returns:
-            List of new FrontierUrl instances discovered
-        
-        Raises:
-            NotImplementedError: If the strategy is not implemented
-        """
-        pass
+            # Wait for network idle
+            await self.page.wait_for_load_state('networkidle')
+            
+            # Wait for full page load
+            await self.page.wait_for_load_state('load')
+            
+            # Scroll for lazy content
+            await self.page.evaluate("""
+                window.scrollTo(0, document.body.scrollHeight);
+                window.scrollTo(0, 0);
+            """)
+            
+            # Short pause for JS reactions
+            await self.page.wait_for_timeout(1000)
+
+        except Exception as e:
+            self.logger.warning(
+                "Error waiting for page ready",
+                error=str(e)
+            )
 
     async def _handle_dynamic_elements(self):
         """Handle common dynamic page elements like popups, cookies, and load more buttons."""
         try:
-            # Gestione cookie e privacy banners
+            # Handle cookie and privacy banners
             cookie_selectors = [
                 '[id*="cookie"]', 
                 '[id*="privacy"]',
@@ -74,13 +73,13 @@ class CrawlerStrategy(ABC):
                     if button:
                         await button.click()
                         self.logger.debug(f"Clicked cookie/privacy button: {selector}")
-                        # Attendi che il banner scompaia
+                        # Wait for banner to disappear
                         await self.page.wait_for_timeout(1000)
                         break
                 except:
                     continue
 
-            # Gestione pulsanti di caricamento
+            # Handle load more buttons
             load_more_selectors = [
                 'button:has-text("carica")', 
                 'button:has-text("load")',
@@ -90,7 +89,7 @@ class CrawlerStrategy(ABC):
                 'text="carica altri"'
             ]
             
-            max_clicks = 5  # Limite di sicurezza
+            max_clicks = 5  # Safety limit
             clicks = 0
             while clicks < max_clicks:
                 clicked = False
@@ -110,7 +109,7 @@ class CrawlerStrategy(ABC):
                 if not clicked:
                     break
 
-            # Gestione modali
+            # Handle modals
             await self._handle_modals()
 
         except Exception as e:
@@ -136,23 +135,23 @@ class CrawlerStrategy(ABC):
                         await button.scroll_into_view_if_needed()
                         await button.click()
                         
-                        # Attendi che il modal sia visibile
+                        # Wait for modal to be visible
                         modal = await self.page.wait_for_selector(
                             '.modal.show, [role="dialog"][class*="show"]',
                             timeout=3000
                         )
                         
                         if modal:
-                            await self.page.wait_for_timeout(500)  # Attendi animazione
+                            await self.page.wait_for_timeout(500)  # Wait for animation
                             
-                            # Estrai eventuali link dal modal
+                            # Extract links from modal
                             modal_links = await modal.query_selector_all('a[href]')
                             for link in modal_links:
                                 href = await link.get_attribute('href')
                                 if href:
                                     self.logger.debug(f"Found link in modal: {href}")
                             
-                            # Chiudi il modal
+                            # Close modal
                             close_button = await self.page.query_selector(
                                 '.modal.show button[data-bs-dismiss="modal"], [role="dialog"][class*="show"] button[aria-label="Close"]'
                             )
@@ -172,39 +171,9 @@ class CrawlerStrategy(ABC):
                 "Error handling modals",
                 error=str(e)
             )
-    
-    async def _validate_url_accessibility(self, url: str) -> bool:
-        """
-        Validate if a URL is accessible.
-        
-        Args:
-            url: URL to validate
-        
-        Returns:
-            bool: True if URL is accessible, False otherwise
-        """
-        try:
-            response = await self.page.goto(
-                url,
-                wait_until='domcontentloaded',
-                timeout=15000
-            )
-            return response and response.status == 200
-        except Exception as e:
-            self.logger.error(
-                "Error validating URL accessibility",
-                url=url,
-                error=str(e)
-            )
-            return False
 
     async def _get_page_urls(self) -> Set[str]:
-        """
-        Extract all URLs from current page.
-        
-        Returns:
-            Set[str]: Set of normalized valid URLs from the page
-        """
+        """Extract all URLs from current page."""
         try:
             # Get all anchor tags with href attributes
             links = await self.page.evaluate("""
@@ -238,10 +207,6 @@ class CrawlerStrategy(ABC):
                         if self._is_valid_url(onclick_url):
                             valid_urls.add(onclick_url)
             
-            # Add file URLs
-            file_urls = await self._extract_file_urls()
-            valid_urls.update(file_urls)
-            
             return valid_urls
             
         except Exception as e:
@@ -253,16 +218,11 @@ class CrawlerStrategy(ABC):
             return set()
 
     async def _extract_file_urls(self) -> Set[str]:
-        """
-        Extract URLs that point to files (pdf, doc, etc) using various techniques.
-        
-        Returns:
-            Set[str]: Set of file URLs found
-        """
+        """Extract URLs that point to files (pdf, doc, etc)."""
         try:
             file_urls = set()
             
-            # Cerca link diretti a file
+            # Look for direct file links
             file_extensions = r'\.(pdf|doc|docx|xls|xlsx|txt|csv|zip|rar)$'
             links = await self.page.query_selector_all('a[href*=".pdf"], a[href*=".doc"], a[href*=".xls"]')
             
@@ -273,7 +233,7 @@ class CrawlerStrategy(ABC):
                     if normalized:
                         file_urls.add(normalized)
 
-            # Cerca anche in onclick e altri attributi
+            # Check onclick and other attributes
             onclick_elements = await self.page.query_selector_all('[onclick*="download"], [onclick*="file"]')
             for element in onclick_elements:
                 onclick = await element.get_attribute('onclick')
@@ -290,187 +250,128 @@ class CrawlerStrategy(ABC):
                 error=str(e)
             )
             return set()
-    async def _analyze_with_scrapegraph(self) -> Tuple[Set[str], Set[str]]:
-        """
-        Analyze current page with ScrapegraphAI to identify target and seed URLs.
-        Uses configuration from crawler_config.yaml for graph settings and prompts.
+
+    async def _store_urls(
+        self, 
+        target_urls: Set[str],
+        seed_urls: Set[str],
+        parent: FrontierUrl
+    ) -> List[FrontierUrl]:
+        """Store discovered URLs in frontier."""
+        new_urls = []
         
-        Returns:
-            Tuple[Set[str], Set[str]]: Sets of (target_urls, seed_urls)
-        """
-        try:
-            if not self.scrapegraph_api_key:
-                self.logger.error("ScrapegraphAI API key not provided")
-                return set(), set()
+        # Process target URLs first
+        for url in target_urls:
+            try:
+                # Skip if URL already exists and frontier_crud is available
+                if self.frontier_crud is not None:
+                    if await self.frontier_crud.exists_in_frontier(url):
+                        continue
 
-            # Get current page content and URL
-            content = await self.page.content()
-            current_url = self.page.url
+                frontier_url = self.create_frontier_url(
+                    url=url,
+                    parent=parent,
+                    is_target=True
+                )
 
-            # Extract metadata for better context
-            metadata = await self.page.evaluate("""
-                () => ({
-                    title: document.title,
-                    metaDescription: document.querySelector('meta[name="description"]')?.content,
-                    h1: Array.from(document.getElementsByTagName('h1')).map(h => h.textContent),
-                })
-            """)
+                # Store in database if frontier_crud is available
+                if self.frontier_crud is not None:
+                    url_id = await self.frontier_crud.create_url(frontier_url)
+                    frontier_url.id = url_id
+                    
+                new_urls.append(frontier_url)
+                
+                self.logger.info(
+                    "Stored target URL",
+                    url=url,
+                    parent_url=str(parent.url),
+                    depth=parent.depth + 1
+                )
 
-            # Prepare graph config
-            graph_config = {
-                "llm": {
-                    "api_key": self.scrapegraph_api_key,
-                    "model": "gpt-4o-mini",  # From config['graph_config']['model']
-                    "temperature": 0,
-                },
-                "verbose": False,  # From config['graph_config']['verbose']
-                "headless": True,  # From config['graph_config']['headless']
-            }
+            except Exception as e:
+                self.logger.error(
+                    "Error storing target URL",
+                    url=url,
+                    error=str(e)
+                )
 
-            # Use general prompt from config
-            prompt = """
-            Find all URLs that are the main bando of scholarships, research grants, 
-            graduation awards, or similar, or URLs that might contain them. 
-            Label PDF links (with pdf extension) of scholarships, research grants, 
-            graduation awards, or similar academic opportunities as "target". 
-            Label URLs that may contain such PDFs but are not PDF links as "seed". 
-            Search only in links that could potentially have documents related to 2024, 
-            2025, or 2026.
-            """
+        # Process seed URLs if not at max depth
+        if parent.depth < parent.max_depth - 1:
+            for url in seed_urls:
+                try:
+                    # Skip if seed URL was already processed and frontier_crud is available
+                    if self.frontier_crud is not None:
+                        existing_url = await self.frontier_crud.get_url_by_url(url)
+                        if existing_url is not None and \
+                           not existing_url.is_target and \
+                           existing_url.status == UrlStatus.PROCESSED:
+                            self.logger.info(
+                                "Skipping already processed seed URL",
+                                url=url
+                            )
+                            continue
+                        
+                        if await self.frontier_crud.exists_in_frontier(url):
+                            continue
 
-            # Initialize ScrapegraphAI with schema
-            search_graph = SmartScraperMultiGraph(
-                prompt=prompt,
-                config=graph_config,
-                source=[current_url],
-                schema=Urls
+                    frontier_url = self.create_frontier_url(
+                        url=url,
+                        parent=parent,
+                        is_target=False
+                    )
+
+                    # Store in database if frontier_crud is available
+                    if self.frontier_crud is not None:
+                        url_id = await self.frontier_crud.create_url(frontier_url)
+                        frontier_url.id = url_id
+                        
+                    new_urls.append(frontier_url)
+                    
+                    self.logger.info(
+                        "Stored seed URL",
+                        url=url,
+                        parent_url=str(parent.url),
+                        depth=parent.depth + 1
+                    )
+
+                except Exception as e:
+                    self.logger.error(
+                        "Error storing seed URL",
+                        url=url,
+                        error=str(e)
+                    )
+
+        return new_urls
+
+    async def _update_url_status(
+        self,
+        frontier_url: FrontierUrl,
+        status: UrlStatus,
+        error_message: Optional[str] = None
+    ) -> None:
+        """Update URL status in frontier."""
+        if self.frontier_crud is not None and frontier_url.id is not None:
+            await self.frontier_crud.update_url_status(
+                frontier_url.id,
+                status,
+                error_message=error_message
             )
 
-            # Run analysis
-            result = search_graph.run()
-
-            # Process results
-            target_urls = set()
-            seed_urls = set()
-
-            if result and 'urls' in result:
-                for url_data in result['urls']:
-                    if not url_data.get('pagination', 'false').lower() == 'true':
-                        url = url_data.get('url')
-                        if url:
-                            # Normalize URL
-                            normalized_url = self._normalize_url(url, current_url)
-                            if normalized_url:
-                                # Check if it's a target (PDF) or seed URL
-                                if url_data.get('url_category') == 'target' or \
-                                (normalized_url.lower().endswith('.pdf') and 
-                                    self._is_target_url(normalized_url, [])):  # Empty patterns list as we rely on AI
-                                    target_urls.add(normalized_url)
-                                elif url_data.get('url_category') == 'seed':
-                                    seed_urls.add(normalized_url)
-
-            self.logger.info(
-                "ScrapegraphAI analysis completed",
-                targets_found=len(target_urls),
-                seeds_found=len(seed_urls)
-            )
-
-            return target_urls, seed_urls
-
-        except Exception as e:
-            self.logger.error(
-                "Error in ScrapegraphAI analysis",
-                error=str(e),
-                url=self.page.url
-            )
-            return set(), set()
-    
-    async def _get_page_metadata(self) -> dict:
-        """
-        Extract useful metadata from the current page.
-        
-        Returns:
-            dict: Dictionary containing page metadata
-        """
-        try:
-            metadata = await self.page.evaluate("""
-                () => ({
-                    title: document.title,
-                    description: document.querySelector('meta[name="description"]')?.content,
-                    keywords: document.querySelector('meta[name="keywords"]')?.content,
-                    canonical: document.querySelector('link[rel="canonical"]')?.href,
-                    h1: Array.from(document.getElementsByTagName('h1')).map(h => h.textContent.trim()),
-                    lastModified: document.lastModified
-                })
-            """)
-            return metadata
-        except Exception as e:
-            self.logger.error(
-                "Error extracting page metadata",
-                page_url=self.page.url,
-                error=str(e)
-            )
-            return {}
-
-    async def _wait_for_page_ready(self):
-        """Wait for page to be completely loaded and stable."""
-        try:
-            # Attendi caricamento base
-            await self.page.wait_for_load_state('domcontentloaded')
-            
-            # Attendi network idle
-            await self.page.wait_for_load_state('networkidle')
-            
-            # Attendi caricamento immagini e altri contenuti
-            await self.page.wait_for_load_state('load')
-            
-            # Scrolling per caricare contenuto lazy
-            await self.page.evaluate("""
-                window.scrollTo(0, document.body.scrollHeight);
-                window.scrollTo(0, 0);
-            """)
-            
-            # Breve pausa per eventuali reazioni JS
-            await self.page.wait_for_timeout(1000)
-
-        except Exception as e:
-            self.logger.warning(
-                "Error waiting for page ready",
-                error=str(e)
-            )
-    
     def _is_valid_url(self, url: str) -> bool:
-        """
-        Validate URL format and scheme.
-        
-        Args:
-            url: URL to validate
-            
-        Returns:
-            bool: True if URL is valid, False otherwise
-        """
+        """Validate URL format and scheme."""
         try:
             result = urlparse(url)
             return all([
                 result.scheme, 
                 result.netloc,
                 result.scheme in ['http', 'https'],
-                not result.netloc.startswith('.')  # Avoid relative domains
+                not result.netloc.startswith('.')
             ])
         except Exception:
             return False
             
     def _matches_pattern(self, url: str, pattern: str) -> bool:
-        """
-        Check if URL matches a regex pattern.
-        
-        Args:
-            url: URL to check
-            pattern: Regex pattern to match against
-            
-        Returns:
-            bool: True if URL matches pattern, False otherwise
-        """
+        """Check if URL matches a regex pattern."""
         try:
             return bool(re.search(pattern, url, re.IGNORECASE))
         except re.error as e:
@@ -482,45 +383,22 @@ class CrawlerStrategy(ABC):
             return False
             
     def _is_target_url(self, url: str, patterns: List[str]) -> bool:
-        """
-        Check if URL matches any target patterns.
-        
-        Args:
-            url: URL to check
-            patterns: List of regex patterns to match against
-            
-        Returns:
-            bool: True if URL matches any pattern, False otherwise
-        """
+        """Check if URL matches any target patterns."""
         return any(self._matches_pattern(url, pattern) for pattern in patterns)
         
     def _normalize_url(self, url: str, base_url: str) -> Optional[str]:
-        """
-        Normalize relative URL to absolute URL.
-        
-        Args:
-            url: URL to normalize
-            base_url: Base URL for resolving relative URLs
-            
-        Returns:
-            Optional[str]: Normalized URL if valid, None otherwise
-        """
+        """Normalize relative URL to absolute URL."""
         try:
-            # Clean the URL first
             url = url.strip()
-            
-            # Skip invalid or empty URLs
             if not url or url.startswith(('javascript:', 'mailto:', 'tel:')):
                 return None
                 
             absolute_url = urljoin(base_url, url)
             parsed = urlparse(absolute_url)
             
-            # Additional validation
             if not all([parsed.scheme, parsed.netloc]):
                 return None
                 
-            # Normalize the URL
             normalized = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
             if parsed.query:
                 normalized += f"?{parsed.query}"
@@ -535,24 +413,14 @@ class CrawlerStrategy(ABC):
                 error=str(e)
             )
             return None
-       
+
     def create_frontier_url(
         self,
         url: str,
         parent: FrontierUrl,
         is_target: bool = False
     ) -> FrontierUrl:
-        """
-        Create a new FrontierUrl instance based on parent URL.
-        
-        Args:
-            url: URL string
-            parent: Parent FrontierUrl instance
-            is_target: Whether URL is a target document
-            
-        Returns:
-            FrontierUrl: New FrontierUrl instance
-        """
+        """Create a new FrontierUrl instance based on parent URL."""
         try:
             return FrontierUrl(
                 url=url,
@@ -574,3 +442,8 @@ class CrawlerStrategy(ABC):
                 error=str(e)
             )
             raise
+
+    @abstractmethod
+    async def execute(self, frontier_url: FrontierUrl) -> List[FrontierUrl]:
+        """Execute the crawling strategy for a given URL."""
+        pass

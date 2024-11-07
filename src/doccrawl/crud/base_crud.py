@@ -93,12 +93,7 @@ class BaseCRUD:
                 record_id = cur.fetchone()[0] if return_id else None
                 self.conn.commit()
                 
-                self.logger.info(
-                    'Record inserted successfully',
-                    table=table,
-                    record_id=record_id if return_id else None
-                )
-                
+        
                 return record_id
                 
         except Exception as e:
@@ -196,13 +191,7 @@ class BaseCRUD:
                 cur.execute(query, set_values + where_values)
                 updated = [dict(row) for row in cur.fetchall()] if return_updated else None
                 self.conn.commit()
-                
-                self.logger.info(
-                    'Update completed successfully',
-                    table=table,
-                    conditions=conditions
-                )
-                
+
                 return updated
                 
         except Exception as e:

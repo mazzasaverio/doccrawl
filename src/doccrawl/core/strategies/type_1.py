@@ -1,17 +1,63 @@
-# src/core/strategies/type_1.py
 from typing import List, Set
 import logfire
+from playwright.async_api import TimeoutError as PlaywrightTimeout
+
 from .base_strategy import CrawlerStrategy
-from ...models.frontier_model import FrontierUrl
+from ...models.frontier_model import FrontierUrl, UrlStatus
 
 class Type1Strategy(CrawlerStrategy):
     """
     Strategy for Type 1 URLs (single page with target links).
     
-    This strategy handles pages that contain target document links.
-    It processes a single page to find and collect all matching target URLs.
+    Features:
+    - Process single page to find target URLs
+    - Extract file URLs specifically
+    - No crawling depth (max_depth must be 0)
+    - No seed URLs required
     """
     
+    async def _extract_target_urls(self, frontier_url: FrontierUrl) -> Set[str]:
+        """
+        Extract all target URLs from the page.
+        
+        Args:
+            frontier_url: Current FrontierUrl being processed
+            
+        Returns:
+            Set[str]: Set of target URLs found
+        """
+        try:
+            # Navigate to page
+            response = await self.page.goto(str(frontier_url.url))
+            if not response or response.status != 200:
+                return set()
+
+            # Wait for page to be ready and handle dynamic elements
+            await self._wait_for_page_ready()
+            await self._handle_dynamic_elements()
+            
+            # Get all URLs including file URLs
+            all_urls = await self._get_page_urls()
+            file_urls = await self._extract_file_urls()
+            all_urls.update(file_urls)
+            
+            # Filter target URLs
+            target_urls = {
+                url for url in all_urls
+                if url != str(frontier_url.url) and
+                self._is_target_url(url, frontier_url.target_patterns)
+            }
+            
+            return target_urls
+            
+        except Exception as e:
+            self.logger.error(
+                "Error extracting target URLs",
+                url=str(frontier_url.url),
+                error=str(e)
+            )
+            return set()
+
     async def execute(self, frontier_url: FrontierUrl) -> List[FrontierUrl]:
         """
         Execute Type 1 strategy for pages containing target links.
@@ -20,7 +66,7 @@ class Type1Strategy(CrawlerStrategy):
             frontier_url: Current FrontierUrl to process
             
         Returns:
-            List of FrontierUrl: List of target URLs found
+            List[FrontierUrl]: List of target URLs found
         """
         try:
             self.logger.info(
@@ -28,68 +74,24 @@ class Type1Strategy(CrawlerStrategy):
                 url=str(frontier_url.url)
             )
 
-            # Validate target patterns
+            # Validate configuration
             if not frontier_url.target_patterns:
+                self.logger.error("No target patterns specified")
+                return []
+
+            if frontier_url.max_depth != 0:
                 self.logger.error(
-                    "No target patterns specified for Type 1 URL",
-                    url=str(frontier_url.url)
+                    "Invalid max_depth for Type 1 URL",
+                    max_depth=frontier_url.max_depth
                 )
                 return []
 
-            # Navigate to page
-            response = await self.page.goto(str(frontier_url.url))
-            if not response or response.status != 200:
-                self.logger.error(
-                    "Failed to access URL",
-                    url=str(frontier_url.url),
-                    status=response.status if response else None
-                )
-                return []
+            # Extract and store target URLs
+            target_urls = await self._extract_target_urls(frontier_url)
+            new_urls = await self._store_urls(target_urls, set(), frontier_url)
 
-            # Wait for page to be ready
-            await self._wait_for_page_ready()
-            
-            # Handle dynamic elements (popups, load more buttons, etc)
-            await self._handle_dynamic_elements()
-            
-            # Extract all URLs from the page
-            all_urls = await self._get_page_urls()
-            
-            # Extract file-specific URLs
-            file_urls = await self._extract_file_urls()
-            all_urls.update(file_urls)
-            
-            new_urls = []
-            
-            # Process found URLs
-            for url in all_urls:
-                # Skip same URL as parent
-                if url == str(frontier_url.url):
-                    continue
-                    
-                # Check if URL matches target patterns
-                if self._is_target_url(url, frontier_url.target_patterns):
-                    # Skip if URL already exists in frontier
-                    if self.frontier_crud and \
-                       await self.frontier_crud.exists_in_frontier(url):
-                        self.logger.debug(
-                            "Target URL already in frontier",
-                            url=url
-                        )
-                        continue
-                        
-                    # Create new frontier URL
-                    new_frontier_url = self.create_frontier_url(
-                        url=url,
-                        parent=frontier_url,
-                        is_target=True
-                    )
-                    new_urls.append(new_frontier_url)
-                    
-                    self.logger.debug(
-                        "Found new target URL",
-                        url=url
-                    )
+            # Update current URL status
+            await self._update_url_status(frontier_url, UrlStatus.PROCESSED)
 
             self.logger.info(
                 "Page processing completed",
@@ -101,8 +103,13 @@ class Type1Strategy(CrawlerStrategy):
 
         except Exception as e:
             self.logger.error(
-                "Error processing Type 1 URL",
+                "Error executing Type 1 strategy",
                 url=str(frontier_url.url),
                 error=str(e)
+            )
+            await self._update_url_status(
+                frontier_url,
+                UrlStatus.FAILED,
+                error_message=str(e)
             )
             return []
