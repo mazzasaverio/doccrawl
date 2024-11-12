@@ -1,8 +1,10 @@
+import os
 from typing import List, Set, Tuple
 import logfire
 import nest_asyncio
 from scrapegraphai.graphs import SmartScraperMultiGraph
 from pydantic import BaseModel
+import yaml
 
 from .base_strategy import CrawlerStrategy
 from ...models.frontier_model import FrontierUrl, UrlStatus
@@ -48,20 +50,31 @@ class Type3Strategy(CrawlerStrategy):
                 self.logger.error("ScrapegraphAI API key not provided")
                 return set(), set()
 
-            # Get configuration from settings
+            config_path = "/home/sam/github/doccrawl/config/crawler_config.yaml"
+            def load_config(config_path: str) -> dict:
+                with open(config_path, 'r') as file:
+                    return yaml.safe_load(file)
+            config = load_config(config_path)
+            config = load_config(config_path)
             graph_config = {
+                
                 "llm": {
-                    "api_key": self.scrapegraph_api_key,
-                    "model": settings.crawler_config.default_settings.get(
-                        "graph_config", {}).get("model", "openai/gpt-4o-mini"),
+                    "api_key": os.getenv("SCRAPEGRAPH_API_KEY"),
+                    "model": "openai/gpt-4o-mini",
                     "temperature": 0,
                 },
-                "verbose": False,
-                "headless": True,
+                "verbose": True,
+                "headless": config['crawler']['graph_config']['headless'],
             }
+            prompt = config['crawler']['graph_config']['prompts']['general']
 
-            prompt = settings.crawler_config.default_settings.get(
-                "graph_config", {}).get("prompts", {}).get("general")
+            search_graph = SmartScraperMultiGraph(
+                prompt=prompt,
+                config=graph_config,
+                source= url,
+                schema=Urls
+            )
+
 
             # Initialize and run ScrapegraphAI
             search_graph = SmartScraperMultiGraph(
@@ -71,32 +84,26 @@ class Type3Strategy(CrawlerStrategy):
                 schema=Urls
             )
 
+   
+            
             result = search_graph.run()
-            
-            # Process and validate results
-            target_urls = set()
-            seed_urls = set()
-            
-            if result and 'urls' in result:
-                for url_data in result['urls']:
-                    if url_data.get('pagination', 'false').lower() == 'true':
-                        continue
-                        
-                    url = url_data.get('url')
-                    if not url or not self._is_valid_url(url):
-                        continue
-                        
-                    normalized_url = self._normalize_url(url, self.page.url)
-                    if not normalized_url:
-                        continue
-                        
-                    if url_data.get('url_category') == 'target' and \
-                       normalized_url.lower().endswith('.pdf'):
-                        target_urls.add(normalized_url)
-                    elif url_data.get('url_category') == 'seed':
-                        seed_urls.add(normalized_url)
 
-            return target_urls, seed_urls
+            logfire.info(f"ScrapegraphAI result: {result}")
+
+            # Convert result to Urls model
+            urls_model = Urls(**result)
+
+            seed_urls = [
+                url_data.url for url_data in urls_model.urls
+                if url_data.url_category == 'seed' and url_data.pagination != 'true'
+            ]
+
+            target_urls = [
+                url_data.url for url_data in urls_model.urls
+                if url_data.url_category == 'target'
+            ]
+
+            return set(target_urls), set(seed_urls)
 
         except Exception as e:
             self.logger.error(
@@ -159,6 +166,8 @@ class Type3Strategy(CrawlerStrategy):
             target_urls, seed_urls = await self._analyze_with_scrapegraph(
                 str(frontier_url.url)
             )
+
+            logfire.info(f"ScrapegraphAI target_urls: {target_urls}")
             
             return await self._store_urls(target_urls, seed_urls, frontier_url)
 

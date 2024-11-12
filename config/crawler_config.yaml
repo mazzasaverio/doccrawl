@@ -1,59 +1,3 @@
-# config/crawler_config.yaml
-# Document Crawler Configuration Guide
-#
-# This configuration file defines the crawling strategy for different types of document sources.
-# Each URL is classified into one of five types (0-4), each with specific behaviors:
-#
-# Type 0 - Direct Target URLs:
-#   - Direct links to target documents (e.g., direct PDF links)
-#   - No crawling depth (max_depth must be 0)
-#   - No seed_pattern needed
-#   - Example use: Known document URLs that don't require crawling
-#
-# Type 1 - Single Page with Targets:
-#   - Pages containing target document links
-#   - No crawling depth (max_depth must be 0)
-#   - No seed_pattern needed
-#   - Uses target_patterns to identify document links
-#   - Example use: Archive pages with document listings
-#
-# Type 2 - Seed and Target Pages:
-#   - Pages containing both seed URLs and target documents
-#   - Crawls one level deep (max_depth must be 1)
-#   - Requires seed_pattern to identify next-level pages
-#   - Uses target_patterns to identify documents
-#   - Example use: Index pages with links to archive sections
-#   - Skip seeds already present in frontier table
-#
-# Type 3 - Complex AI-Assisted:
-#   - Three-level crawling strategy:
-#     * Depth 0: Uses seed_pattern and target_patterns
-#     * Depth 1: Uses ScrapegraphAI to identify both seeds and targets
-#     * Depth 2: Only collects targets matching target_patterns
-#   - Requires max_depth = 2
-#   - Requires seed_pattern for initial crawling
-#   - Skip seeds already present in frontier table
-#
-# Type 4 - Full AI-Assisted:
-#   - Multi-level crawling with AI assistance:
-#     * Depth 0-1: Uses ScrapegraphAI to identify both seeds and targets
-#     * Final depth: Only collects targets matching target_patterns
-#   - Configurable max_depth (must be ≥ 2)
-#   - No initial seed_pattern required (fully AI-driven)
-#   - Skip seeds already present in frontier table
-#
-# Common Configuration Elements:
-# - target_patterns: List of regex patterns identifying target documents
-#   Examples:
-#   - ".*\.pdf$" : Matches URLs ending in .pdf
-#   - ".*/doc/\d+$" : Matches URLs like "/doc/123"
-#   - ".*/document/[a-zA-Z0-9-]+$" : Matches document URLs with alphanumeric IDs
-#
-# - seed_pattern: Regex pattern identifying URLs to crawl next
-#   Examples:
-#   - "/archive/\d{4}/$" : Matches year-based archive sections
-#   - "/section/[a-zA-Z0-9-]+/$" : Matches section URLs
-# Config for Document Crawler
 crawler:
   default_settings:
     request_delay: 1.0 # seconds
@@ -81,30 +25,6 @@ crawler:
           extension of the URL if it is a PDF link, only in that case yoy can label as "target". So be careful to label as a "target" if and only if the link is a pdf, otherwise put "seed". Consider only the main PDF document or the main PDF bando if present). Label URLs that may contain such PDFs but are not PDF links, as "seed". Search only in links that could potentially have documents related to 2024, 2025, or 2026.
 
   categories:
-    - name: "Roma La Sapienza"
-      description: "Borse di studio e premi di laurea Sapienza"
-      urls:
-        - url: "https://www.uniroma1.it/it/pagina/premi-tesi-borse-di-studio-e-altre-opportunita?page=1"
-          type: 3
-          target_patterns:
-            - ".*\\.pdf$"
-          seed_pattern: "https://www.uniroma1.it/it/borsa-di-studio"
-          max_depth: 2
-
-        - url: "https://www.uniroma1.it/it/pagina/premi-tesi-borse-di-studio-e-altre-opportunita?page=2"
-          type: 3
-          target_patterns:
-            - ".*\\.pdf$"
-          seed_pattern: "https://www.uniroma1.it/it/borsa-di-studio"
-          max_depth: 2
-
-        - url: "https://www.uniroma1.it/it/pagina/premi-tesi-borse-di-studio-e-altre-opportunita?page=3"
-          type: 3
-          target_patterns:
-            - ".*\\.pdf$"
-          seed_pattern: "https://www.uniroma1.it/it/borsa-di-studio"
-          max_depth: 2
-
     - name: "Bologna"
       description: "Borse di studio e premi di laurea UniBo"
       urls:

@@ -250,7 +250,7 @@ class CrawlerStrategy(ABC):
                 error=str(e)
             )
             return set()
-
+        
     async def _store_urls(
         self, 
         target_urls: Set[str],
@@ -259,11 +259,12 @@ class CrawlerStrategy(ABC):
     ) -> List[FrontierUrl]:
         """Store discovered URLs in frontier."""
         new_urls = []
+        stored_targets = 0
+        stored_seeds = 0
         
         # Process target URLs first
         for url in target_urls:
             try:
-                # Skip if URL already exists and frontier_crud is available
                 if self.frontier_crud is not None:
                     if await self.frontier_crud.exists_in_frontier(url):
                         continue
@@ -274,19 +275,12 @@ class CrawlerStrategy(ABC):
                     is_target=True
                 )
 
-                # Store in database if frontier_crud is available
                 if self.frontier_crud is not None:
                     url_id = await self.frontier_crud.create_url(frontier_url)
                     frontier_url.id = url_id
                     
                 new_urls.append(frontier_url)
-                
-                self.logger.info(
-                    "Stored target URL",
-                    url=url,
-                    parent_url=str(parent.url),
-                    depth=parent.depth + 1
-                )
+                stored_targets += 1
 
             except Exception as e:
                 self.logger.error(
@@ -299,16 +293,11 @@ class CrawlerStrategy(ABC):
         if parent.depth < parent.max_depth - 1:
             for url in seed_urls:
                 try:
-                    # Skip if seed URL was already processed and frontier_crud is available
                     if self.frontier_crud is not None:
                         existing_url = await self.frontier_crud.get_url_by_url(url)
                         if existing_url is not None and \
-                           not existing_url.is_target and \
-                           existing_url.status == UrlStatus.PROCESSED:
-                            self.logger.info(
-                                "Skipping already processed seed URL",
-                                url=url
-                            )
+                        not existing_url.is_target and \
+                        existing_url.status == UrlStatus.PROCESSED:
                             continue
                         
                         if await self.frontier_crud.exists_in_frontier(url):
@@ -320,19 +309,12 @@ class CrawlerStrategy(ABC):
                         is_target=False
                     )
 
-                    # Store in database if frontier_crud is available
                     if self.frontier_crud is not None:
                         url_id = await self.frontier_crud.create_url(frontier_url)
                         frontier_url.id = url_id
                         
                     new_urls.append(frontier_url)
-                    
-                    self.logger.info(
-                        "Stored seed URL",
-                        url=url,
-                        parent_url=str(parent.url),
-                        depth=parent.depth + 1
-                    )
+                    stored_seeds += 1
 
                 except Exception as e:
                     self.logger.error(
@@ -340,6 +322,14 @@ class CrawlerStrategy(ABC):
                         url=url,
                         error=str(e)
                     )
+
+        # Log summary of stored URLs
+        self.logger.info(
+            "URLs storage summary",
+            stored_targets=stored_targets,
+            stored_seeds=stored_seeds,
+            parent_url=str(parent.url)
+        )
 
         return new_urls
 

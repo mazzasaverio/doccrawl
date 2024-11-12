@@ -92,7 +92,7 @@ class Crawler:
                try:
                    browser = await p.chromium.launch()
                    await browser.close()
-                   logfire.info("Playwright browser already installed")
+                 
                except Exception as e:
                    if "Executable doesn't exist" in str(e):
                        logfire.info("Installing Playwright browser...")

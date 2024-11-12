@@ -21,6 +21,7 @@ dependencies = [
     "scrapegraphai>=1.27.0",
     "nest-asyncio>=1.6.0",
     "ipykernel>=6.29.5",
+    "asyncpg>=0.30.0",
 ]
 
 [project.scripts]

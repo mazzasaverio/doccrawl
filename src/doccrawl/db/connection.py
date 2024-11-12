@@ -17,14 +17,7 @@ class DatabaseConnection:
         try:
             db_settings = settings.database
             
-            logfire.info(
-                "Attempting database connection",
-                host=db_settings.host,
-                port=db_settings.port,
-                user=db_settings.user,
-                database=db_settings.database
-            )
-            
+           
             self.conn = psycopg2.connect(
                 dbname=db_settings.database,
                 user=db_settings.user,
@@ -34,7 +27,7 @@ class DatabaseConnection:
                 sslmode=db_settings.sslmode
             )
             
-            logfire.info("Successfully connected to the database")
+          
             return self.conn
             
         except psycopg2.Error as e:
@@ -120,8 +113,7 @@ class DatabaseConnection:
                 """)
 
                 self.conn.commit()
-                logfire.info("Successfully created/verified tables")
-                
+             
             except Exception as e:
                 self.conn.rollback()
                 logfire.error("Error creating tables", error=str(e))
